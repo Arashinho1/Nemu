@@ -1,4 +1,5 @@
 import discord
+import asyncio
 from discord import ui
 from discord.ext import commands
 
@@ -142,7 +143,8 @@ async def build_kido_image_embed(user_id, member=None):
         return None, None
 
     avatar = await read_discord_avatar(member, size=512)
-    buffer = create_kido_card(data, avatar_source=avatar)
+    # Renderização em thread separada para manter a responsividade
+    buffer = await asyncio.to_thread(create_kido_card, data, avatar_source=avatar)
     filename = f"kido_card_{user_id}.png"
     file = discord.File(buffer, filename=filename)
     embed = discord.Embed(

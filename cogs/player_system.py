@@ -1,4 +1,5 @@
 import discord
+import asyncio
 from discord.ext import commands
 from discord import ui
 from database import get_connection, get_vagas_bonus, get_canal_logs, get_pericia_bonuses
@@ -182,7 +183,8 @@ async def build_profile_image_embed(user_id, member=None, layout="desktop"):
         return None, None
     avatar = await _read_avatar(member)
     renderer = render_attribute_panel_mobile if layout == "mobile" else render_attribute_panel_desktop
-    image = renderer(user_id, character_data=profile, avatar_bytes=avatar)
+    # Roda a renderização em uma thread separada para não travar o bot
+    image = await asyncio.to_thread(renderer, user_id, character_data=profile, avatar_bytes=avatar)
     if not image:
         return None, None
 

@@ -5,7 +5,13 @@ import unicodedata
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rpg_bleach.db')
 
 def get_connection():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    # Otimizações de performance para SQLite
+    conn.execute("PRAGMA journal_mode=WAL;")  # Permite leitura e escrita simultâneas
+    conn.execute("PRAGMA synchronous=NORMAL;") # Acelera escritas sem sacrificar muita segurança
+    conn.execute("PRAGMA cache_size=-64000;") # Cache de 64MB para reduzir I/O de disco
+    conn.execute("PRAGMA temp_store=MEMORY;") # Armazena tabelas temporárias na RAM
+    return conn
 
 
 DEFAULT_PERICIAS = [

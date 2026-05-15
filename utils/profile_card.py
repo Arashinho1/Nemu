@@ -145,10 +145,31 @@ def _draw_header(draw, profile):
         draw.rectangle((148 + i * 22, 68, 162 + i * 22, 76), fill=BLUE)
 
     _line(draw, (620, 42, 620, 118), fill=(76, 96, 128), width=1)
-    draw.text((732, 64), "BLEACH", font=_font(28, bold=True, display=True), fill=WHITE, anchor="lm")
-    draw.text((998, 28), _fmt(profile["pontos_livres"]), font=_font(72, bold=True, display=True), fill=BLUE, anchor="rm")
-    draw.text((998, 80), "PONTOS DISPONIVEIS", font=_font(18), fill=WHITE, anchor="rm")
-    draw.text((998, 104), "Nemu", font=_font(14), fill=WHITE, anchor="rm")
+
+    right_x = 998
+    sep_x = 620
+    # Draw points number using a fitted font so it never overflows into the left area
+    points_text = _fmt(profile.get("pontos_livres", "0"))
+    points_max_width = max(80, right_x - sep_x - 24)
+    points_font, points_value = _fit(draw, points_text, points_max_width, 72, min_size=18, bold=True, display=True)
+    draw.text((right_x, 28), points_value, font=points_font, fill=BLUE, anchor="rm")
+
+    # Draw points label, also fitted
+    label_font, label_value = _fit(draw, "PONTOS DISPONIVEIS", points_max_width, 18, min_size=10, bold=True)
+    draw.text((right_x, 80), label_value, font=label_font, fill=WHITE, anchor="rm")
+
+    draw.text((right_x, 104), "Nemu", font=_font(14), fill=WHITE, anchor="rm")
+
+    # Draw BLEACH left of the points block but ensure it doesn't overlap
+    bleach_font = _font(28, bold=True, display=True)
+    bleach_w, bleach_h = _text_size(draw, "BLEACH", bleach_font)
+    preferred_bleach_x = 732
+    max_bleach_x = right_x - bleach_w - 16
+    if max_bleach_x < sep_x + 12:
+        bleach_x = sep_x + 12
+    else:
+        bleach_x = min(preferred_bleach_x, max_bleach_x)
+    draw.text((bleach_x, 64), "BLEACH", font=bleach_font, fill=WHITE, anchor="lm")
 
 
 def _draw_portrait(image, draw, avatar):

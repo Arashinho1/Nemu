@@ -35,17 +35,14 @@ def acquire_single_instance_lock():
     lock_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nemu.lock")
     _lock_file = open(lock_path, "a+b")
     if os.path.getsize(lock_path) == 0:
-        _lock_file.write(b" ")
+        _lock_file.write(b"1")
         _lock_file.flush()
 
-    if msvcrt:
+    if msvcrt: # Apenas se rodar em Windows local
         try:
             _lock_file.seek(0)
             msvcrt.locking(_lock_file.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError:
-            _lock_file.close()
-            _lock_file = None
-            print("Outra instancia do Nemu ja esta rodando. Encerrando esta copia.")
             sys.exit(0)
 
     _lock_file.seek(0)

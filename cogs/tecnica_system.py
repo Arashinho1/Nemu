@@ -1,4 +1,5 @@
 import discord
+import asyncio
 from discord import ui
 from discord.ext import commands
 
@@ -156,7 +157,8 @@ async def build_tecnica_image_embed(user_id, member=None):
         return None, None
 
     avatar = await read_discord_avatar(member, size=512)
-    buffer = create_tecnica_card(data, avatar_source=avatar)
+    # Evita que o CPU-bound do Pillow bloqueie o heartbeat do bot
+    buffer = await asyncio.to_thread(create_tecnica_card, data, avatar_source=avatar)
     filename = f"tecnica_card_{user_id}.png"
     file = discord.File(buffer, filename=filename)
     embed = discord.Embed(
