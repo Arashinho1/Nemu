@@ -286,6 +286,27 @@ def get_current_reiatsu_limit_index(user_id):
 
     return limite_atual, alvo_idx, reiatsu
 
+def delete_player_data(conn, user_id, include_character=True):
+    if include_character:
+        conn.execute('DELETE FROM personagens WHERE user_id = ?', (user_id,))
+
+    user_tables = [
+        'player_vagas',
+        'player_pericias',
+        'player_potencial',
+        'kido_estado',
+        'kido_usos',
+        'tecnica_estado',
+        'tecnica_usos',
+        'tecnica_user_unlocks',
+        'attribute_modifiers',
+    ]
+    for table in user_tables:
+        conn.execute(f'DELETE FROM {table} WHERE user_id = ?', (user_id,))
+
+    conn.execute('DELETE FROM kido_tecnicas WHERE classificacao = ? AND criador_id = ?', ('criado', user_id))
+    conn.execute('DELETE FROM tecnicas WHERE classificacao = ? AND criador_id = ?', ('criado', user_id))
+
 class ModalNome(ui.Modal, title='Registro'):
     nome_input = ui.TextInput(label='Nome do Personagem')
     def __init__(self, raca):
@@ -298,16 +319,7 @@ class ModalNome(ui.Modal, title='Registro'):
                 if existing:
                     return await interaction.response.send_message("❌ Você já possui personagem.", ephemeral=True)
 
-                conn.execute('DELETE FROM player_vagas WHERE user_id = ?', (interaction.user.id,))
-                conn.execute('DELETE FROM player_pericias WHERE user_id = ?', (interaction.user.id,))
-                conn.execute('DELETE FROM player_potencial WHERE user_id = ?', (interaction.user.id,))
-                conn.execute('DELETE FROM kido_estado WHERE user_id = ?', (interaction.user.id,))
-                conn.execute('DELETE FROM kido_usos WHERE user_id = ?', (interaction.user.id,))
-                conn.execute('DELETE FROM kido_tecnicas WHERE classificacao = ? AND criador_id = ?', ('criado', interaction.user.id))
-                conn.execute('DELETE FROM tecnica_estado WHERE user_id = ?', (interaction.user.id,))
-                conn.execute('DELETE FROM tecnica_usos WHERE user_id = ?', (interaction.user.id,))
-                conn.execute('DELETE FROM tecnicas WHERE classificacao = ? AND criador_id = ?', ('criado', interaction.user.id))
-                conn.execute('DELETE FROM attribute_modifiers WHERE user_id = ?', (interaction.user.id,))
+                delete_player_data(conn, interaction.user.id, include_character=False)
                 conn.execute('INSERT INTO personagens (user_id, nome, raca) VALUES (?, ?, ?)', (interaction.user.id, self.nome_input.value, self.raca))
                 conn.commit()
             except:
@@ -341,23 +353,87 @@ class ConfirmDeleteView(ui.View):
             return await interaction.response.send_message("Você não pode fazer isso.", ephemeral=True)
         
         with get_connection() as conn:
-            conn.execute('DELETE FROM personagens WHERE user_id = ?', (self.user_id,))
-            conn.execute('DELETE FROM player_vagas WHERE user_id = ?', (self.user_id,))
-            conn.execute('DELETE FROM player_pericias WHERE user_id = ?', (self.user_id,))
-            conn.execute('DELETE FROM player_potencial WHERE user_id = ?', (self.user_id,))
-            conn.execute('DELETE FROM kido_estado WHERE user_id = ?', (self.user_id,))
-            conn.execute('DELETE FROM kido_usos WHERE user_id = ?', (self.user_id,))
-            conn.execute('DELETE FROM kido_tecnicas WHERE classificacao = ? AND criador_id = ?', ('criado', self.user_id))
-            conn.execute('DELETE FROM tecnica_estado WHERE user_id = ?', (self.user_id,))
-            conn.execute('DELETE FROM tecnica_usos WHERE user_id = ?', (self.user_id,))
-            conn.execute('DELETE FROM tecnicas WHERE classificacao = ? AND criador_id = ?', ('criado', self.user_id))
-            conn.execute('DELETE FROM attribute_modifiers WHERE user_id = ?', (self.user_id,))
+            delete_player_data(conn, self.user_id)
             conn.commit()
         
         await interaction.response.edit_message(content="🗑️ Sua ficha foi apagada permanentemente.", embed=None, view=None)
 
     @ui.button(label="Cancelar", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.edit_message(content="Ação cancelada.", embed=None, view=None)
+
+class ConfirmResetPlayerView(ui.View):
+    def __init__(self, requester_id, target):
+        super().__init__(timeout=30)
+        self.requester_id = requester_id
+        self.target = target
+        self.target_id = target.id
+        self.target_mention = target.mention
+
+    async def check_requester(self, interaction):
+        if interaction.user.id == self.requester_id:
+            return True
+        await interaction.response.send_message("❌ Apenas quem iniciou esta confirmação pode responder.", ephemeral=True)
+        return False
+
+    @ui.button(label="Resetar Jogador", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
+        if not await self.check_requester(interaction):
+            return
+
+        with get_connection() as conn:
+            existing = conn.execute('SELECT nome FROM personagens WHERE user_id = ?', (self.target_id,)).fetchone()
+            if not existing:
+                return await interaction.response.edit_message(
+                    content=f"❌ {self.target_mention} não possui personagem para resetar.",
+                    embed=None,
+                    view=None,
+                )
+            role_ids = [
+                row[0]
+                for row in conn.execute(
+                    '''
+                    SELECT v.role_id
+                    FROM player_vagas pv
+                    JOIN vagas v ON pv.vaga_nome = v.nome
+                    WHERE pv.user_id = ? AND v.role_id IS NOT NULL
+                    ''',
+                    (self.target_id,),
+                ).fetchall()
+                if row[0]
+            ]
+            delete_player_data(conn, self.target_id)
+            conn.commit()
+
+        role_warning = ""
+        roles = []
+        if interaction.guild:
+            for role_id in role_ids:
+                role = interaction.guild.get_role(int(role_id))
+                if role and role in self.target.roles:
+                    roles.append(role)
+        if roles:
+            try:
+                await self.target.remove_roles(
+                    *roles,
+                    reason=f"Reset de jogador solicitado por {interaction.user} ({interaction.user.id})",
+                )
+            except discord.DiscordException:
+                role_warning = "\n⚠️ Não consegui remover um ou mais cargos no Discord. Confira as permissões/cargo do bot."
+
+        await interaction.response.edit_message(
+            content=(
+                f"🧹 {self.target_mention} teve ficha, progresso, técnicas criadas e "
+                f"desbloqueios individuais resetados.{role_warning}"
+            ),
+            embed=None,
+            view=None,
+        )
+
+    @ui.button(label="Cancelar", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
+        if not await self.check_requester(interaction):
+            return
         await interaction.response.edit_message(content="Ação cancelada.", embed=None, view=None)
 
 class PlayerSystem(commands.Cog):
@@ -395,6 +471,37 @@ class PlayerSystem(commands.Cog):
             color=discord.Color.red()
         )
         await ctx.send(embed=embed, view=ConfirmDeleteView(ctx.author.id))
+
+    @commands.command(name="resetar", help="(Admin) Reseta a ficha e progresso de um jogador. Uso: .resetar @membro")
+    @commands.has_permissions(administrator=True)
+    async def resetar(self, ctx, membro: discord.Member = None):
+        if not membro:
+            return await ctx.send("❌ Use `.resetar @membro`.")
+        if membro.bot:
+            return await ctx.send("❌ Informe um jogador, não um bot.")
+
+        with get_connection() as conn:
+            personagem = conn.execute(
+                'SELECT nome, raca FROM personagens WHERE user_id = ?',
+                (membro.id,),
+            ).fetchone()
+
+        if not personagem:
+            return await ctx.send(f"❌ {membro.mention} não possui personagem para resetar.")
+
+        nome, raca = personagem
+        embed = discord.Embed(
+            title="⚠️ Resetar Jogador",
+            description=(
+                f"Você está prestes a apagar a ficha e o progresso de {membro.mention}.\n\n"
+                f"Personagem: **{nome}**\n"
+                f"Raça: **{raca}**\n\n"
+                "Também serão removidos vagas atribuídas, perícias, potenciais, cooldowns, "
+                "técnicas/Kidō criados e desbloqueios individuais."
+            ),
+            color=discord.Color.red(),
+        )
+        await ctx.send(embed=embed, view=ConfirmResetPlayerView(ctx.author.id, membro))
 
     @commands.command()
     async def criar(self, ctx):

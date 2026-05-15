@@ -229,6 +229,7 @@ class GuideSystem(commands.Cog):
             },
             "Recursos & Pontos": {
                 "dar": "Dá pontos para um jogador. Uso: `.dar <pa|pp> @membro valor`.",
+                "resetar": "Reseta a ficha e progresso de um jogador. Uso: `.resetar @membro`.",
                 "setar_nivel": "Define o patamar de Reiatsu de um jogador.",
                 "romper_limite": "Sobe 1 limite. Use `.romper_limite completo @membro` para sincronizar com a Reiatsu atual.",
                 "romper_limite_completo": "Atalho para ajustar o limite diretamente ao nível da Reiatsu atual.",
