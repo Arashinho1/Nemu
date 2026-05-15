@@ -755,3 +755,6 @@ class PlayerSystem(commands.Cog):
 
         if ativo:
             embed
+
+async def setup(bot):
+    await bot.add_cog(PlayerSystem(bot))
