@@ -1,0 +1,17 @@
+.env
+*.db
+*.sqlite
+*.sqlite3
+
+__pycache__/
+.cache/
+.pytest_cache/
+
+venv/
+.venv/
+
+backups/
+node_modules/
+dist/
+
+nemu.lock

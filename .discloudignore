@@ -1,0 +1,10 @@
+.git
+__pycache__
+.cache
+venv
+.venv
+backups
+node_modules
+dist
+nemu.lock
+rpg_bleach.db
