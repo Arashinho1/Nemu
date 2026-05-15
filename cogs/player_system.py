@@ -17,7 +17,7 @@ from utils.avatar import read_discord_avatar
 from utils.history_log import send_points_history
 from utils.profile_service import distribute_attribute, get_profile_data
 from utils.pericia_card import create_pericia_card
-from utils.pericia_service import investir_pericia
+from utils.pericia_service import investir_pericia, get_proximo_custo
 
 
 class ModalDistribuir(ui.Modal, title='Distribuir Pontos'):
@@ -472,13 +472,100 @@ class PlayerSystem(commands.Cog):
         )
         await ctx.send(embed=embed, view=ConfirmDeleteView(ctx.author.id))
 
-    @commands.command(name="resetar", help="(Admin) Reseta a ficha e progresso de um jogador. Uso: .resetar @membro")
+    @commands.command(name="resetar", help="(Admin) Reseta a ficha, PA ou PP de um jogador. Uso: .resetar [pa|pp] @membro")
     @commands.has_permissions(administrator=True)
-    async def resetar(self, ctx, membro: discord.Member = None):
+    async def resetar(self, ctx, arg1: str = None, arg2: discord.Member = None):
+        if not arg1:
+            return await ctx.send("❌ Use `.resetar @membro`, `.resetar pa @membro` ou `.resetar pp @membro`.")
+
+        mode = "full"
+        membro = None
+
+        if arg1.lower() == "pa":
+            mode = "pa"
+            membro = arg2
+        elif arg1.lower() == "pp":
+            mode = "pp"
+            membro = arg2
+        else:
+            try:
+                converter = commands.MemberConverter()
+                membro = await converter.convert(ctx, arg1)
+            except commands.BadArgument:
+                return await ctx.send("❌ Membro não encontrado ou tipo de reset inválido (use pa/pp).")
+
         if not membro:
-            return await ctx.send("❌ Use `.resetar @membro`.")
+            return await ctx.send(f"❌ Informe o membro para o reset de {arg1.upper()}.")
+
         if membro.bot:
             return await ctx.send("❌ Informe um jogador, não um bot.")
+
+        if mode == "pa":
+            with get_connection() as conn:
+                res = conn.execute(
+                    'SELECT forca, velocidade, resistencia, pontos_livres FROM personagens WHERE user_id = ?',
+                    (membro.id,)
+                ).fetchone()
+                if not res:
+                    return await ctx.send(f"❌ {membro.mention} não possui personagem.")
+                
+                f, v, r, pl_atual = res
+                total_refund = f + v + r
+                if total_refund == 0:
+                    return await ctx.send(f"ℹ️ {membro.mention} não possui pontos de atributos distribuídos.")
+
+                conn.execute(
+                    'UPDATE personagens SET forca = 0, velocidade = 0, resistencia = 0, pontos_livres = pontos_livres + ? WHERE user_id = ?',
+                    (total_refund, membro.id)
+                )
+                conn.commit()
+
+            await send_points_history(
+                self.bot, action="Reset", point_type="Pontos de Atributos (PA)",
+                quantity=total_refund, giver=ctx.author, receiver=membro,
+                source_channel=ctx.channel,
+                details={
+                    "pool_label": "PA disponíveis",
+                    "pool_before": pl_atual,
+                    "pool_after": pl_atual + total_refund,
+                    "extra": "Reset de distribuição de atributos"
+                }
+            )
+            return await ctx.send(f"✅ Atributos de {membro.mention} resetados. `{total_refund}` PA devolvidos ao saldo.")
+
+        elif mode == "pp":
+            with get_connection() as conn:
+                res_p = conn.execute('SELECT pontos_pericia FROM personagens WHERE user_id = ?', (membro.id,)).fetchone()
+                if not res_p:
+                    return await ctx.send(f"❌ {membro.mention} não possui personagem.")
+                
+                pp_atual = res_p[0]
+                rows = conn.execute('SELECT nivel, pp_investido FROM player_pericias WHERE user_id = ?', (membro.id,)).fetchall()
+                if not rows:
+                    return await ctx.send(f"ℹ️ {membro.mention} não possui perícias para resetar.")
+
+                total_refund = 0
+                for nivel, investido in rows:
+                    total_refund += investido
+                    for i in range(1, nivel):
+                        total_refund += get_proximo_custo(i)
+                
+                conn.execute('DELETE FROM player_pericias WHERE user_id = ?', (membro.id,))
+                conn.execute('UPDATE personagens SET pontos_pericia = pontos_pericia + ? WHERE user_id = ?', (total_refund, membro.id))
+                conn.commit()
+
+            await send_points_history(
+                self.bot, action="Reset", point_type="Pontos de Perícia (PP)",
+                quantity=total_refund, giver=ctx.author, receiver=membro,
+                source_channel=ctx.channel,
+                details={
+                    "pool_label": "PP disponíveis",
+                    "pool_before": pp_atual,
+                    "pool_after": pp_atual + total_refund,
+                    "extra": "Reset de perícias"
+                }
+            )
+            return await ctx.send(f"✅ Perícias de {membro.mention} resetadas. `{total_refund}` PP devolvidos ao saldo.")
 
         with get_connection() as conn:
             personagem = conn.execute(
@@ -667,65 +754,4 @@ class PlayerSystem(commands.Cog):
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
 
         if ativo:
-            embed.add_field(name="🔥 Liberação Ativa", value=f"**{pot_nome}**\nMultiplicador: `x{mult_pot:.2f}`", inline=False)
-
-        vagas_buffs = []
-        with get_connection() as conn:
-            res = conn.execute('''
-                SELECT v.nome, v.multiplicador, v.bonus_fixo, v.atributo
-                FROM player_vagas pv JOIN vagas v ON pv.vaga_nome = v.nome 
-                WHERE pv.user_id = ?
-            ''', (user_id,)).fetchall()
-            for nome, mult, fixo, attr in res:
-                if mult > 0 or fixo > 0:
-                    vagas_buffs.append(f"• **{nome}**: `+{int(mult*100)}%` / `+{fixo}` ({attr})")
-
-            manual_rows = conn.execute('''
-                SELECT atributo, nome, tipo, valor, origem, turnos_restantes
-                FROM attribute_modifiers
-                WHERE user_id = ? AND ativo = 1
-                ORDER BY origem COLLATE NOCASE, nome COLLATE NOCASE
-            ''', (user_id,)).fetchall()
-            for attr, nome, tipo, valor, origem, turnos in manual_rows:
-                if attr not in manual_by_attr:
-                    continue
-                valor = float(valor or 0)
-                if tipo == "percent":
-                    manual_by_attr[attr]["percent"] += valor / 100
-                    valor_text = f"+{valor:g}%"
-                elif tipo == "multiplier":
-                    manual_by_attr[attr]["multiplier"] *= valor
-                    valor_text = f"x{valor:.2f}"
-                else:
-                    manual_by_attr[attr]["flat"] += valor
-                    valor_text = f"+{int(valor)}"
-                dur_text = f" | {turnos} turno(s)" if turnos is not None else ""
-                manual_by_attr[attr]["lines"].append(
-                    f"• **{nome}**: `{valor_text}` em {attr} ({origem or 'manual'}{dur_text})"
-                )
-
-        if vagas_buffs:
-            embed.add_field(name="📜 Bônus de Vagas & Títulos", value="\n".join(vagas_buffs), inline=False)
-
-        pericia_buffs = [f"• **{k.capitalize()}**: `+{int(v*100)}%`" for k, v in p_bonuses.items() if v > 0]
-        if pericia_buffs:
-            embed.add_field(name="📊 Bônus de Perícias", value="\n".join(pericia_buffs), inline=False)
-
-        temp_buffs = []
-        for attr in ["forca", "velocidade", "resistencia"]:
-            temp_buffs.extend(manual_by_attr[attr]["lines"])
-        if temp_buffs:
-            embed.add_field(name="⚔️ Bônus Temporários", value="\n".join(temp_buffs[:12]), inline=False)
-
-        resumo = ""
-        for attr in ['forca', 'velocidade', 'resistencia']:
-            manual = manual_by_attr[attr]
-            m_total = (1.0 + v_bonuses[attr]['mult'] + p_bonuses[attr] + manual["percent"]) * mult_pot * manual["multiplier"]
-            fixo_text = f" | Fixo temp: `+{int(manual['flat'])}`" if manual["flat"] else ""
-            resumo += f"┣ **{attr.capitalize()}**: `x{m_total:.2f}`{fixo_text}\n"
-        
-        embed.add_field(name="🎯 Multiplicadores Finais", value=resumo + "┗ *Cálculo: (Base + Vagas + Perícias) * Liberação*", inline=False)
-        await ctx.send(embed=embed)
-
-async def setup(bot):
-    await bot.add_cog(PlayerSystem(bot))
+            embed
