@@ -1,7 +1,8 @@
 import sqlite3
 import unicodedata
 
-from database import get_connection
+from database import get_connection, get_vagas_bonus, get_pericia_bonuses
+from utils.logic import calcular_reiryoku
 from utils.pericia_service import get_accessible_pericia_racas, split_raca_list
 
 
@@ -531,3 +532,67 @@ def use_tecnica(user_id, tecnica_id, role_ids=None):
         "state": ensure_tecnica_state(user_id),
     }
     return True, "Técnica usada.", data
+
+def use_hollow_regen(user_id):
+    """Processa a regeneração Hollow baseada em Tiers da perícia Regen."""
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        char = conn.execute("SELECT raca, forca, velocidade, resistencia FROM personagens WHERE user_id = ?", (user_id,)).fetchone()
+        if not char:
+            return False, "Personagem não encontrado.", None
+
+        # Validação de Raça
+        raca_low = (char['raca'] or "").lower()
+        allowed = ["hollow", "arrancar", "vaizard", "vizard", "visored"]
+        if not any(sub in raca_low for sub in allowed):
+            return False, "Apenas Hollows, Arrancars ou Vaizards possuem Regeneração Instantânea.", None
+
+        # Busca nível da perícia Regen
+        pericia = conn.execute("""
+            SELECT pp.nivel FROM player_pericias pp
+            JOIN pericias_base pb ON pp.pericia_id = pb.id
+            WHERE pp.user_id = ? AND pb.nome = 'Regen'
+        """, (user_id,)).fetchone()
+        
+        nivel = pericia['nivel'] if pericia else 1
+        
+        # Definição de Tiers (I-II, III-IV, V-VI)
+        if nivel <= 2:
+            percent, mult, tier_label = 0.05, 1.50, "I/II"
+        elif nivel <= 4:
+            percent, mult, tier_label = 0.10, 1.35, "III/IV"
+        else:
+            percent, mult, tier_label = 0.15, 1.25, "V/VI"
+
+        # Cálculo de Reiryoku Máximo (Atributos + Bônus)
+        v_bonuses = get_vagas_bonus(user_id)
+        p_bonuses = get_pericia_bonuses(user_id)
+        r_base = calcular_reiryoku(
+            char['forca'] + v_bonuses["forca"]["fixo"],
+            char['velocidade'] + v_bonuses["velocidade"]["fixo"],
+            char['resistencia'] + v_bonuses["resistencia"]["fixo"]
+        )
+        r_max = int(r_base * (1.0 + p_bonuses.get("reiryoku", 0.0)))
+
+        # Status atual (tabela kido_estado centraliza a energia atual)
+        state = conn.execute("SELECT reiryoku_atual, cooldown FROM kido_estado WHERE user_id = ?", (user_id,)).fetchone()
+        if not state:
+            conn.execute("INSERT INTO kido_estado (user_id, reiryoku_atual) VALUES (?, ?)", (user_id, r_max))
+            curr_reiryoku, cd = r_max, 0
+        else:
+            curr_reiryoku, cd = state['reiryoku_atual'], state['cooldown']
+
+        if cd > 0:
+            return False, f"Você está em exaustão espiritual por mais {cd} turno(s).", None
+
+        heal_amount = int(r_max * percent)
+        cost = int(heal_amount * mult)
+
+        if curr_reiryoku < cost:
+            return False, f"Energia insuficiente. Custo: {cost} | Atual: {curr_reiryoku}", None
+
+        final_reiryoku = min(r_max, curr_reiryoku - cost + heal_amount)
+        conn.execute("UPDATE kido_estado SET reiryoku_atual = ?, cooldown = 0 WHERE user_id = ?", (final_reiryoku, user_id))
+        conn.commit()
+
+        return True, "Sucesso", {"tier": tier_label, "cost": cost, "heal": heal_amount, "current": final_reiryoku, "max": r_max}

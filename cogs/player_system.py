@@ -1,5 +1,6 @@
 import discord
 import asyncio
+import math
 from discord.ext import commands
 from discord import ui
 from database import get_connection, get_vagas_bonus, get_canal_logs, get_pericia_bonuses
@@ -19,6 +20,7 @@ from utils.history_log import send_points_history
 from utils.profile_service import distribute_attribute, get_profile_data
 from utils.pericia_card import create_pericia_card
 from utils.pericia_service import investir_pericia, get_proximo_custo
+from utils.tecnica_service import use_hollow_regen
 
 
 class ModalDistribuir(ui.Modal, title='Distribuir Pontos'):
@@ -635,17 +637,35 @@ class PlayerSystem(commands.Cog):
 
     @commands.command(help="(Admin) Seta o nível de Reiatsu de um player, dando pontos livres proporcionais.")
     @commands.has_permissions(administrator=True)
-    async def setar_nivel(self, ctx, membro: discord.Member, *, nivel: str):
+    async def setar_nivel(self, ctx, membro: discord.Member, *, entrada: str):
+        parts = entrada.lower().split()
+        grau_map = {"baixo": 0.0, "medio": 0.35, "médio": 0.35, "alto": 0.70}
+        grau_str = "baixo"
+
+        # Verifica se a última palavra é um grau conhecido
+        if len(parts) > 1 and parts[-1] in grau_map:
+            grau_str = parts[-1]
+            nome_nivel_input = " ".join(parts[:-1])
+        else:
+            nome_nivel_input = " ".join(parts)
+
         niveis = {
             nome.lower(): (idx, nome, minimo, maximo)
             for idx, (nome, minimo, maximo) in enumerate(SPIRITUAL_POWER_LEVELS)
         }
-        alvo = nivel.lower()
-        if alvo not in niveis:
+
+        if nome_nivel_input not in niveis:
             return await ctx.send(
-                f"❌ Nível inválido! Use: `{', '.join(niveis.keys())}`"
+                f"❌ Nível inválido! Use: `{', '.join(niveis.keys())}` (Opcional: baixo/medio/alto)"
             )
-        alvo_idx, target_nome, target_reiatsu, target_cap = niveis[alvo]
+        
+        alvo_idx, target_nome, target_min, target_max = niveis[nome_nivel_input]
+
+        # Calcula a Reiatsu alvo com base no grau
+        target_reiatsu = target_min
+        if not math.isinf(float(target_max)):
+            faixa = target_max - target_min
+            target_reiatsu = int(target_min + (faixa * grau_map[grau_str]))
 
         with get_connection() as conn:
             res = conn.execute('SELECT raca, forca, velocidade, resistencia, limite_nivel, pontos_livres FROM personagens WHERE user_id = ?', (membro.id,)).fetchone()
@@ -681,9 +701,10 @@ class PlayerSystem(commands.Cog):
                 "extra": f"Origem: setar nível para {target_nome}",
             },
         )
+        grau_display = f" ({grau_str.capitalize()})" if grau_str != "baixo" else ""
         await ctx.send(
             f"📈 {membro.mention} recebeu `{pontos_para_dar}` pontos para entrar no nível "
-            f"**{target_nome}** (`{format_reiatsu_limit(target_reiatsu)}` a `{format_reiatsu_limit(target_cap)}`)."
+            f"**{target_nome}{grau_display}** (`{format_reiatsu_limit(target_reiatsu)}` a `{format_reiatsu_limit(target_max)}`)."
         )
 
     @commands.command(help="(Admin) Rompe o limite de um player. Use `.romper_limite completo @membro` para sincronizar com a Reiatsu atual.")
@@ -712,6 +733,24 @@ class PlayerSystem(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def romper_limite_completo_cmd(self, ctx, membro: discord.Member = None):
         await self.aplicar_romper_limite_completo(ctx, membro or ctx.author)
+
+    @commands.command(name="curar", help="Usa a regeneração Hollow para curar o corpo e recuperar Reiryoku.")
+    async def curar(self, ctx):
+        """Comando de regeneração exclusivo para Hollow, Arrancar e Vaizard."""
+        ok, msg, data = use_hollow_regen(ctx.author.id)
+        if not ok:
+            return await ctx.send(f"❌ {msg}")
+
+        embed = discord.Embed(
+            title="🔴 Regeneração Instantânea",
+            description=f"{ctx.author.mention} utilizou sua regeneração de **Tier {data['tier']}**.",
+            color=0xc0392b
+        )
+        embed.add_field(name="Custo Espiritual", value=f"`{data['cost']}`", inline=True)
+        embed.add_field(name="Reiryoku Recuperado", value=f"`{data['heal']}`", inline=True)
+        embed.add_field(name="Energia Final", value=f"`{data['current']}/{data['max']}`", inline=False)
+        embed.set_footer(text="A regeneração Hollow consome Reiatsu para restaurar a integridade espiritual.")
+        await ctx.send(embed=embed)
 
     async def aplicar_romper_limite_completo(self, ctx, membro):
         dados = get_current_reiatsu_limit_index(membro.id)

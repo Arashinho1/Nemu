@@ -530,7 +530,7 @@ def use_kaido_heal(user_id, target_id=None):
     else:
         restored = min(restore_amount, missing_before)
         target_reiryoku = target_state["reiryoku_atual"] + restored
-    cooldown = 1
+    cooldown = 0
     ultimo_kido = f"Kaidō: Curar (+{restored}/{restore_amount} Reiryoku)"
 
     with get_connection() as conn:
