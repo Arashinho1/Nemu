@@ -13,7 +13,6 @@ from utils.kido_service import (
     list_known_kido_tecnicas,
     list_kido_tecnicas,
     parse_percent,
-    rest_kido,
     use_kaido_heal,
     use_niju_eisho,
     use_kido_tecnica,
@@ -292,86 +291,6 @@ def build_use_embed(data):
         inline=False,
     )
     return embed
-
-
-def build_rest_request_embed(user, channel):
-    embed = discord.Embed(
-        title="🔮 Pedido de Restauração de Reiryoku",
-        description="Alguém quer restaurar sua energia.",
-        color=0x7f8cff,
-    )
-    embed.add_field(name="Pessoa", value=f"{user.mention}\n`{user}`", inline=False)
-    embed.add_field(name="Chat usado", value=channel.mention if hasattr(channel, "mention") else str(channel), inline=False)
-    return embed
-
-
-class KidoRestApprovalView(ui.View):
-    def __init__(self, bot, requester_id, channel_id, approver_id):
-        super().__init__(timeout=3600)
-        self.bot = bot
-        self.requester_id = requester_id
-        self.channel_id = channel_id
-        self.approver_id = approver_id
-        self.resolved = False
-
-    async def _notify_player(self, approved):
-        channel = self.bot.get_channel(self.channel_id)
-        if channel is None:
-            try:
-                channel = await self.bot.fetch_channel(self.channel_id)
-            except discord.DiscordException:
-                channel = None
-
-        user = self.bot.get_user(self.requester_id)
-        if user is None:
-            try:
-                user = await self.bot.fetch_user(self.requester_id)
-            except discord.DiscordException:
-                user = None
-
-        mention = user.mention if user else f"`{self.requester_id}`"
-        if approved:
-            state = rest_kido(self.requester_id)
-            message = (
-                f"✅ {mention}, seu pedido de descanso foi aprovado. "
-                f"Seu Reiryoku foi preenchido e restaurado para `{state['reiryoku_atual']}/{state['reiryoku_max']}`."
-            )
-        else:
-            message = f"❌ {mention}, seu pedido de descanso foi negado. Seu Reiryoku não foi preenchido nem restaurado."
-
-        if channel:
-            try:
-                await channel.send(message)
-                return
-            except discord.DiscordException:
-                pass
-        if user:
-            try:
-                await user.send(message)
-            except discord.DiscordException:
-                pass
-
-    async def _resolve(self, interaction, approved):
-        if interaction.user.id != self.approver_id:
-            return await interaction.response.send_message("❌ Apenas o staff responsável pode responder este pedido.", ephemeral=True)
-        if self.resolved:
-            return await interaction.response.send_message("❌ Este pedido já foi respondido.", ephemeral=True)
-
-        self.resolved = True
-        for item in self.children:
-            item.disabled = True
-
-        await self._notify_player(approved)
-        status = "aprovado" if approved else "negado"
-        await interaction.response.edit_message(content=f"Pedido de descanso {status}.", embed=None, view=self)
-
-    @ui.button(label="Aprovar", style=discord.ButtonStyle.success)
-    async def approve(self, interaction, button):
-        await self._resolve(interaction, True)
-
-    @ui.button(label="Negar", style=discord.ButtonStyle.danger)
-    async def deny(self, interaction, button):
-        await self._resolve(interaction, False)
 
 
 class KidoCreateModal(ui.Modal):
@@ -749,12 +668,6 @@ class KidoMenuView(ui.View):
         embed, _ = build_list_embed("proibido", include_private=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @ui.button(label="Descansar", style=discord.ButtonStyle.success, row=1)
-    async def descansar(self, interaction, button):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
-        await request_kido_rest(interaction, self.bot)
-
     @ui.button(label="Perfil", style=discord.ButtonStyle.secondary, row=1)
     async def perfil(self, interaction, button):
         if interaction.user.id != self.user_id:
@@ -942,43 +855,6 @@ class KidoInfoMenuView(ui.View):
         await self._show(interaction, "proibido")
 
 
-async def get_guild_owner(guild):
-    owner = guild.owner
-    if owner:
-        return owner
-    try:
-        return await guild.fetch_member(guild.owner_id)
-    except discord.DiscordException:
-        return None
-
-
-async def request_kido_rest(interaction, bot):
-    if not has_kido_access(interaction.user.id):
-        return await interaction.response.send_message(KIDO_ACCESS_ERROR, ephemeral=True)
-
-    state = ensure_kido_state(interaction.user.id)
-    if not state:
-        return await interaction.response.send_message("❌ Você não possui um personagem.", ephemeral=True)
-    if not interaction.guild:
-        return await interaction.response.send_message("❌ O pedido de descanso precisa ser feito dentro de um servidor.", ephemeral=True)
-
-    owner = await get_guild_owner(interaction.guild)
-    if not owner:
-        return await interaction.response.send_message("❌ Não consegui encontrar o criador do servidor para aprovar o descanso.", ephemeral=True)
-
-    embed = build_rest_request_embed(interaction.user, interaction.channel)
-    view = KidoRestApprovalView(bot, interaction.user.id, interaction.channel.id, owner.id)
-    try:
-        await owner.send(embed=embed, view=view)
-    except discord.DiscordException:
-        return await interaction.response.send_message(
-            "❌ Não consegui enviar DM para o criador do servidor. Peça para ele liberar mensagens privadas.",
-            ephemeral=True,
-        )
-
-    await interaction.response.send_message("📨 Pedido de descanso enviado para aprovação da staff.", ephemeral=True)
-
-
 class KidoSystem(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -1090,28 +966,6 @@ class KidoSystem(commands.Cog):
     async def kido_simular(self, ctx, numero: int, metodo: str = "normal"):
         await self.enviar_simulacao(ctx, numero, metodo)
 
-    @kido.command(name="descansar")
-    async def descansar(self, ctx):
-        if not has_kido_access(ctx.author.id):
-            return await ctx.send(KIDO_ACCESS_ERROR)
-        state = ensure_kido_state(ctx.author.id)
-        if not state:
-            return await ctx.send("❌ Você não possui um personagem.")
-        if not ctx.guild:
-            return await ctx.send("❌ O pedido de descanso precisa ser feito dentro de um servidor.")
-
-        owner = await get_guild_owner(ctx.guild)
-        if not owner:
-            return await ctx.send("❌ Não consegui encontrar o criador do servidor para aprovar o descanso.")
-
-        embed = build_rest_request_embed(ctx.author, ctx.channel)
-        view = KidoRestApprovalView(self.bot, ctx.author.id, ctx.channel.id, owner.id)
-        try:
-            await owner.send(embed=embed, view=view)
-        except discord.DiscordException:
-            return await ctx.send("❌ Não consegui enviar DM para o criador do servidor. Peça para ele liberar mensagens privadas.")
-
-        await ctx.send("📨 Pedido de descanso enviado para aprovação da staff.")
 
 
 async def setup(bot):

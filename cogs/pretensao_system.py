@@ -254,10 +254,25 @@ class PretensaoSystem(commands.Cog):
 
     @commands.command(name="pretensão")
     async def pretensao_status(self, ctx):
+        """Mostra o status atual e o cronograma da pretensão."""
         config = database.get_config_pretensao()
-        if not config or not config[0]: return await ctx.send("❌ Sistema não configurado.")
+        if not config or not config[0]: 
+            return await ctx.send("❌ O sistema de pretensão ainda não foi configurado. Use `.criar_pretensão #canal` para definir o local e `.setar_pretensão` para os horários.")
+        
+        canal_id, h_abrir, h_fechar, dias_str = config
         esta_aberto = logic.esta_na_janela_pretensao(config)
-        await ctx.send(f"🚦 Status da Pretensão: {'🟢 ABERTO' if esta_aberto else '🔴 FECHADO'}")
+
+        mapa_dias = {"0": "Seg", "1": "Ter", "2": "Qua", "3": "Qui", "4": "Sex", "5": "Sab", "6": "Dom"}
+        dias_formatados = ", ".join([mapa_dias[d] for d in dias_str.split(",") if d in mapa_dias])
+
+        if esta_aberto:
+            await ctx.send(f"🚦 **Status da Pretensão:** 🟢 **ABERTO**\n🕒 O chat será silenciado hoje às `{h_fechar}`.")
+        else:
+            await ctx.send(
+                f"🚦 **Status da Pretensão:** 🔴 **FECHADO**\n"
+                f"🕒 Horário: `{h_abrir}` às `{h_fechar}`\n"
+                f"📅 Dias ativos: `{dias_formatados}`"
+            )
 
     @commands.Cog.listener()
     async def on_message(self, message):

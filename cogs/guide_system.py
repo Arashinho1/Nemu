@@ -178,13 +178,11 @@ class GuideSystem(commands.Cog):
                 "passar_turno": "Avança seu turno e reduz cooldowns/durações de Kidō, técnicas e potenciais."
             },
             "Kidō": {
-                "kido": "Abre sua biblioteca de Kidō para Shinigami e Vaizard, com status, listas conhecidas e pedido de descanso.",
-                "kido_usar": "Abre o menu para conjurar Kidō por classificação disponível.",
-                "kido_criar": "Abre o menu de criação com categoria técnica e classificação Comum/Exclusivo/Proibido.",
-                "info_kido": "Mostra detalhes de Kidō oficiais, exclusivos e proibidos.",
-                "listar_kido": "Abre a listagem de Kidō oficiais, criados, exclusivos e proibidos.",
+                "kido": "Abre sua biblioteca de Kidō para Shinigami e Vaizard, com status e listas conhecidas.",
                 "kido_usar": "Conjura Kidō com Encantamento, Sem Encantamento ou Nijū Eishō no Tier III.",
                 "kido_criar": "Cria Kidō próprios como Comum, Exclusivo ou Proibido; administradores também registram Kidō do sistema.",
+                "info_kido": "Mostra detalhes de Kidō oficiais, exclusivos e proibidos.",
+                "listar_kido": "Abre a listagem de Kidō oficiais, criados, exclusivos e proibidos.",
                 "kido simular": "Calcula gasto, poder e cooldown sem consumir Reiryoku.",
                 "kido_simular": "Atalho para simulação de Kidō por número."
             },
