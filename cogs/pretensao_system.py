@@ -78,6 +78,93 @@ class CategoriaSelect(ui.Select):
             view=VagaToggleView(self.values[0])
         )
 
+class PretensaoTimeModal(ui.Modal, title="Configurar Horários"):
+    abrir = ui.TextInput(label="Hora de Abertura (HH:MM)", placeholder="Ex: 19:00", min_length=5, max_length=5)
+    fechar = ui.TextInput(label="Hora de Fechamento (HH:MM)", placeholder="Ex: 22:00", min_length=5, max_length=5)
+
+    def __init__(self, parent_view):
+        super().__init__()
+        self.parent_view = parent_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if ":" not in self.abrir.value or ":" not in self.fechar.value:
+            return await interaction.response.send_message("❌ Formato inválido. Use HH:MM.", ephemeral=True)
+        
+        self.parent_view.hora_abrir = self.abrir.value
+        self.parent_view.hora_fechar = self.fechar.value
+        await self.parent_view.atualizar_mensagem(interaction)
+
+class DiasSemanaSelect(ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Segunda", value="0"),
+            discord.SelectOption(label="Terça", value="1"),
+            discord.SelectOption(label="Quarta", value="2"),
+            discord.SelectOption(label="Quinta", value="3"),
+            discord.SelectOption(label="Sexta", value="4"),
+            discord.SelectOption(label="Sábado", value="5"),
+            discord.SelectOption(label="Domingo", value="6"),
+        ]
+        super().__init__(
+            placeholder="Selecione os dias da semana...",
+            min_values=1,
+            max_values=7,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.dias_selecionados = self.values
+        await self.view.atualizar_mensagem(interaction)
+
+class PretensaoSetupView(ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=300)
+        self.user_id = user_id
+        self.hora_abrir = "19:00"
+        self.hora_fechar = "22:00"
+        self.dias_selecionados = ["0", "1", "2", "3", "4", "5", "6"]
+        self.add_item(DiasSemanaSelect())
+
+    def _formatar_dias(self, lista_dias):
+        mapa = {"0": "Seg", "1": "Ter", "2": "Qua", "3": "Qui", "4": "Sex", "5": "Sab", "6": "Dom"}
+        return ", ".join([mapa[d] for d in sorted(lista_dias)])
+
+    def build_embed(self):
+        embed = discord.Embed(title="⚙️ Configuração de Pretensão", color=0x7289da)
+        embed.description = "Use o menu suspenso para os dias e o botão para os horários."
+        embed.add_field(name="Abertura", value=f"`{self.hora_abrir}`", inline=True)
+        embed.add_field(name="Fechamento", value=f"`{self.hora_fechar}`", inline=True)
+        embed.add_field(name="Dias Ativos", value=f"`{self._formatar_dias(self.dias_selecionados)}`", inline=False)
+        return embed
+
+    async def atualizar_mensagem(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @ui.button(label="Definir Horários", style=discord.ButtonStyle.secondary)
+    async def definir_horas(self, interaction, button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Apenas quem usou o comando pode configurar.", ephemeral=True)
+        await interaction.response.send_modal(PretensaoTimeModal(self))
+
+    @ui.button(label="💾 Salvar Configuração", style=discord.ButtonStyle.success)
+    async def salvar(self, interaction, button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
+        
+        dias_str = ",".join(sorted(self.dias_selecionados))
+        with database.get_connection() as conn:
+            conn.execute(
+                "UPDATE config_pretensao SET hora_abrir = ?, hora_fechar = ?, dias_semana = ? WHERE id = 1",
+                (self.hora_abrir, self.hora_fechar, dias_str)
+            )
+            conn.commit()
+        
+        await interaction.response.edit_message(
+            content="✅ **Configuração de Pretensão salva com sucesso!**",
+            embed=self.build_embed(),
+            view=None
+        )
+
 class PretensaoSystem(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -95,6 +182,28 @@ class PretensaoSystem(commands.Cog):
             conn.execute("UPDATE config_pretensao SET canal_id = ? WHERE id = 1", (target.id,))
             conn.commit()
         await ctx.send(f"🎯 Canal de Pretensão definido para {target.mention}.")
+
+    @commands.command(name="setar_pretensão")
+    @commands.has_permissions(administrator=True)
+    async def setar_pretensao_cmd(self, ctx, abrir: str = None, fechar: str = None, dias: str = "0,1,2,3,4,5,6"):
+        """Configura o horário e dias da pretensão. Se usado sem argumentos, abre o menu visual."""
+        if abrir is None:
+            view = PretensaoSetupView(ctx.author.id)
+            return await ctx.send(embed=view.build_embed(), view=view)
+
+        # Mantém compatibilidade com comando direto
+        if ":" not in abrir or ":" not in fechar:
+            return await ctx.send("❌ Formato de hora inválido. Use HH:MM.")
+
+        with database.get_connection() as conn:
+            conn.execute(
+                "UPDATE config_pretensao SET hora_abrir = ?, hora_fechar = ?, dias_semana = ? WHERE id = 1",
+                (abrir, fechar, dias)
+            )
+            conn.commit()
+        
+        dias_formatados = dias.replace("0","Seg").replace("1","Ter").replace("2","Qua").replace("3","Qui").replace("4","Sex").replace("5","Sab").replace("6","Dom")
+        await ctx.send(f"🕒 **Configuração Atualizada!**\nAbertura: `{abrir}` | Fechamento: `{fechar}`\nDias: `{dias_formatados}`")
 
     @commands.command(name="pretensão_config")
     @commands.has_permissions(administrator=True)
