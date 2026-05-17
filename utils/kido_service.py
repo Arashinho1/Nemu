@@ -703,16 +703,3 @@ def pass_kido_turn(user_id, recover=0):
         )
         conn.commit()
     return ensure_kido_state(user_id)
-
-
-def rest_kido(user_id):
-    state = ensure_kido_state(user_id)
-    if not state:
-        return None
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE kido_estado SET reiryoku_atual = ?, cooldown = 0 WHERE user_id = ?",
-            (state["reiryoku_max"], user_id),
-        )
-        conn.commit()
-    return ensure_kido_state(user_id)

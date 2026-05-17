@@ -165,6 +165,7 @@ class GuideSystem(commands.Cog):
             "Geral": {
                 "criar": "Inicia a criação do seu personagem.",
                 "deletar": "Apaga sua própria ficha permanentemente após confirmação.",
+                "descansar": "Restaura seu Reiryoku ao máximo e limpa cooldowns de Kidō, Técnicas e Potenciais.",
                 "perfil": "Mostra sua ficha em imagem com atributos, distribuição e botão de perícias.",
                 "buffs": "Lista seus bônus ativos e multiplicadores finais.",
                 "guia": "Abre o guia interativo de sistemas.",
@@ -185,8 +186,7 @@ class GuideSystem(commands.Cog):
                 "kido_usar": "Conjura Kidō com Encantamento, Sem Encantamento ou Nijū Eishō no Tier III.",
                 "kido_criar": "Cria Kidō próprios como Comum, Exclusivo ou Proibido; administradores também registram Kidō do sistema.",
                 "kido simular": "Calcula gasto, poder e cooldown sem consumir Reiryoku.",
-                "kido_simular": "Atalho para simulação de Kidō por número.",
-                "kido descansar": "Pede descanso para restaurar o Reiryoku reservado para Kidō."
+                "kido_simular": "Atalho para simulação de Kidō por número."
             },
             "Técnicas": {
                 "tecnica": "Abre o menu de técnicas oficiais e criadas.",
@@ -229,6 +229,7 @@ class GuideSystem(commands.Cog):
             },
             "Recursos & Pontos": {
                 "dar": "Dá pontos para um jogador. Uso: `.dar <pa|pp> @membro valor`.",
+                "limpar": "Zera os pontos (PA ou PP) disponíveis de um jogador. Uso: .limpar <pa|pp> @membro",
                 "resetar": "Reseta a ficha e progresso de um jogador. Uso: `.resetar @membro`.",
                 "setar_nivel": "Define o patamar de Reiatsu de um jogador.",
                 "romper_limite": "Sobe 1 limite. Use `.romper_limite completo @membro` para sincronizar com a Reiatsu atual.",

@@ -20,7 +20,8 @@ from utils.history_log import send_points_history
 from utils.profile_service import distribute_attribute, get_profile_data
 from utils.pericia_card import create_pericia_card
 from utils.pericia_service import investir_pericia, get_proximo_custo
-from utils.tecnica_service import use_hollow_regen
+from utils.tecnica_service import use_hollow_regen, ensure_tecnica_state
+from utils.kido_service import ensure_kido_state
 
 
 class ModalDistribuir(ui.Modal, title='Distribuir Pontos'):
@@ -635,6 +636,41 @@ class PlayerSystem(commands.Cog):
         )
         await ctx.send(f"💎 {membro.mention} recebeu {valor} {label}.")
 
+    @commands.command(help="(Admin) Zera os pontos (PA ou PP) disponíveis de um jogador. Uso: .limpar <pa|pp> @membro")
+    @commands.has_permissions(administrator=True)
+    async def limpar(self, ctx, tipo: str, membro: discord.Member):
+        tipo_lower = tipo.lower()
+        coluna = "pontos_livres" if tipo_lower == "pa" else "pontos_pericia" if tipo_lower == "pp" else None
+        
+        if not coluna:
+            return await ctx.send("❌ Tipo inválido. Use `pa` (Atributos) ou `pp` (Perícia).")
+            
+        with get_connection() as conn:
+            res = conn.execute(f'SELECT {coluna} FROM personagens WHERE user_id = ?', (membro.id,)).fetchone()
+            if not res:
+                return await ctx.send("❌ Personagem não encontrado.")
+            
+            valor_antes = res[0]
+            conn.execute(f'UPDATE personagens SET {coluna} = 0 WHERE user_id = ?', (membro.id,))
+            conn.commit()
+            
+        label = "Pontos de Atributos (PA)" if tipo_lower == "pa" else "Pontos de Perícia (PP)"
+        await send_points_history(
+            self.bot,
+            action="Limpeza",
+            point_type=label,
+            quantity=valor_antes,
+            giver=ctx.author,
+            receiver=membro,
+            source_channel=ctx.channel,
+            details={
+                "pool_label": "Saldo",
+                "pool_before": valor_antes,
+                "pool_after": 0,
+            },
+        )
+        await ctx.send(f"🧹 Os {label} disponíveis de {membro.mention} foram zerados.")
+
     @commands.command(help="(Admin) Seta o nível de Reiatsu de um player, dando pontos livres proporcionais.")
     @commands.has_permissions(administrator=True)
     async def setar_nivel(self, ctx, membro: discord.Member, *, entrada: str):
@@ -751,6 +787,36 @@ class PlayerSystem(commands.Cog):
         embed.add_field(name="Energia Final", value=f"`{data['current']}/{data['max']}`", inline=False)
         embed.set_footer(text="A regeneração Hollow consome Reiatsu para restaurar a integridade espiritual.")
         await ctx.send(embed=embed)
+
+    @commands.command(name="descansar", help="Restaura seu Reiryoku ao máximo e limpa cooldowns de Kidō, Técnicas e Potenciais.")
+    async def descansar(self, ctx):
+        """Comando global de descanso para todas as raças."""
+        user_id = ctx.author.id
+        
+        with get_connection() as conn:
+            # Verifica se existe personagem
+            char = conn.execute("SELECT 1 FROM personagens WHERE user_id = ?", (user_id,)).fetchone()
+            if not char:
+                return await ctx.send("❌ Você não possui um personagem para descansar.")
+
+            # 1. Reset de Energia e Kido/Regen CD (kido_estado)
+            state = ensure_kido_state(user_id)
+            if state:
+                conn.execute(
+                    "UPDATE kido_estado SET reiryoku_atual = ?, cooldown = 0 WHERE user_id = ?",
+                    (state["reiryoku_max"], user_id)
+                )
+
+            # 2. Reset de Técnicas CD (tecnica_estado)
+            ensure_tecnica_state(user_id)
+            conn.execute("UPDATE tecnica_estado SET cooldown = 0 WHERE user_id = ?", (user_id,))
+
+            # 3. Reset de Potenciais CD (player_potencial)
+            conn.execute("UPDATE player_potencial SET cooldown = 0 WHERE user_id = ? AND cooldown > 0", (user_id,))
+            
+            conn.commit()
+
+        await ctx.send(f"💤 {ctx.author.mention} descansou profundamente. Reiryoku restaurado e cooldowns zerados!")
 
     async def aplicar_romper_limite_completo(self, ctx, membro):
         dados = get_current_reiatsu_limit_index(membro.id)
