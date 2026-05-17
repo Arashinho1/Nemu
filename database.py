@@ -407,7 +407,7 @@ def setup_db():
         cursor.execute('''CREATE TABLE IF NOT EXISTS canais_bloqueados_bot (canal_id INTEGER PRIMARY KEY)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS config_pretensao (
             id INTEGER PRIMARY KEY CHECK (id = 1), canal_id INTEGER, hora_abrir TEXT DEFAULT '19:00',
-            hora_fechar TEXT DEFAULT '22:00', dias_semana TEXT DEFAULT '0,1,2,3,4,5,6')''')
+            hora_fechar TEXT DEFAULT '22:00', dias_semana TEXT DEFAULT '0,1,2,3,4,5,6', anunciado INTEGER DEFAULT 0)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS personagens (
             user_id INTEGER PRIMARY KEY, nome TEXT, raca TEXT, forca INTEGER DEFAULT 0,
             velocidade INTEGER DEFAULT 0, resistencia INTEGER DEFAULT 0, pontos_livres INTEGER DEFAULT 0,
@@ -424,7 +424,7 @@ def setup_db():
         cursor.execute('''CREATE TABLE IF NOT EXISTS vagas (
             nome TEXT PRIMARY KEY, categoria TEXT, multiplicador REAL DEFAULT 0, bonus_fixo INTEGER DEFAULT 0,
             role_id INTEGER, atributo TEXT DEFAULT 'todos', limite INTEGER DEFAULT 0,
-            restricao_raca TEXT, vaga_id TEXT UNIQUE, descricao TEXT)''')
+            restricao_raca TEXT, vaga_id TEXT UNIQUE, descricao TEXT, bloqueada INTEGER DEFAULT 0)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS player_vagas (user_id INTEGER, vaga_nome TEXT, FOREIGN KEY(vaga_nome) REFERENCES vagas(nome))''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS vagas_vinculo (vaga_pai TEXT, vaga_filha TEXT, FOREIGN KEY(vaga_pai) REFERENCES vagas(nome), FOREIGN KEY(vaga_filha) REFERENCES vagas(nome), PRIMARY KEY (vaga_pai, vaga_filha))''')
         
@@ -508,6 +508,8 @@ def setup_db():
             ('personagens', 'reiryoku_atual', 'INTEGER'),
             ('kido_usos', 'tecnica_id', 'INTEGER'),
             ('kido_estado', 'ultimo_poder', 'INTEGER DEFAULT 0'),
+            ('vagas', 'bloqueada', 'INTEGER DEFAULT 0'),
+            ('config_pretensao', 'anunciado', 'INTEGER DEFAULT 0')
             ('kido_tecnicas', 'criador_id', 'INTEGER'),
             ('kido_tecnicas', 'descricao', 'TEXT'),
             ('kido_tecnicas', 'dano_bonus', 'REAL'),
