@@ -38,19 +38,34 @@ class VagaActionView(ui.View):
         super().__init__(timeout=60)
         self.vaga_nome = vaga_nome
 
+    async def _voltar_ao_inicio(self, interaction, status_msg):
+        with database.get_connection() as conn:
+            cats = [row[0] for row in conn.execute("SELECT DISTINCT categoria FROM vagas").fetchall()]
+        
+        if not cats:
+            return await interaction.response.edit_message(content="❌ Nenhuma vaga cadastrada.", embed=None, view=None)
+        
+        view = ui.View()
+        view.add_item(CategoriaSelect(cats))
+        await interaction.response.edit_message(
+            content=f"{status_msg}\n\nSelecione a categoria das vagas que deseja configurar:",
+            embed=None,
+            view=view
+        )
+
     @ui.button(label="Liberar", style=discord.ButtonStyle.success)
     async def liberar(self, interaction, button):
         with database.get_connection() as conn:
             conn.execute("UPDATE vagas SET bloqueada = 0 WHERE nome = ?", (self.vaga_nome,))
             conn.commit()
-        await interaction.response.send_message(f"✅ Vaga `{self.vaga_nome}` liberada para resgate.", ephemeral=True)
+        await self._voltar_ao_inicio(interaction, f"✅ Vaga `{self.vaga_nome}` liberada para resgate.")
 
     @ui.button(label="Bloquear", style=discord.ButtonStyle.danger)
     async def bloquear(self, interaction, button):
         with database.get_connection() as conn:
             conn.execute("UPDATE vagas SET bloqueada = 1 WHERE nome = ?", (self.vaga_nome,))
             conn.commit()
-        await interaction.response.send_message(f"🔒 Vaga `{self.vaga_nome}` bloqueada para absolutamente todos.", ephemeral=True)
+        await self._voltar_ao_inicio(interaction, f"🔒 Vaga `{self.vaga_nome}` bloqueada para absolutamente todos.")
 
 class CategoriaSelect(ui.Select):
     def __init__(self, categorias):
