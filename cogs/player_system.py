@@ -21,8 +21,70 @@ from utils.profile_service import distribute_attribute, get_profile_data
 from utils.pericia_card import create_pericia_card
 from utils.pericia_service import investir_pericia, get_proximo_custo
 from utils.tecnica_service import use_hollow_regen, ensure_tecnica_state
-from utils.kido_service import ensure_kido_state
+from utils.kido_service import ensure_kido_state, rest_kido
 
+async def get_guild_owner(guild):
+    if guild.owner:
+        return guild.owner
+    try:
+        return await guild.fetch_member(guild.owner_id)
+    except:
+        return None
+
+class RestApprovalView(ui.View):
+    def __init__(self, bot, user_id, channel_id, owner_id):
+        super().__init__(timeout=3600)
+        self.bot = bot
+        self.user_id = user_id
+        self.channel_id = channel_id
+        self.owner_id = owner_id
+
+    async def _resolve(self, interaction: discord.Interaction, approved: bool):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message("❌ Apenas o dono do servidor pode responder este pedido.", ephemeral=True)
+        
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        
+        status_txt = "APROVADO" if approved else "NEGADO"
+        color = discord.Color.green() if approved else discord.Color.red()
+        
+        if approved:
+            with get_connection() as conn:
+                # 1. Reset de Energia e Kido/Regen CD
+                state = ensure_kido_state(self.user_id)
+                if state:
+                    conn.execute(
+                        "UPDATE kido_estado SET reiryoku_atual = ?, cooldown = 0 WHERE user_id = ?",
+                        (state["reiryoku_max"], self.user_id)
+                    )
+                # 2. Reset de Técnicas CD
+                ensure_tecnica_state(self.user_id)
+                conn.execute("UPDATE tecnica_estado SET cooldown = 0 WHERE user_id = ?", (self.user_id,))
+                # 3. Reset de Potenciais CD
+                conn.execute("UPDATE player_potencial SET cooldown = 0 WHERE user_id = ? AND cooldown > 0", (self.user_id,))
+                conn.commit()
+
+        # Notifica no canal original
+        channel = self.bot.get_channel(self.channel_id)
+        if channel:
+            user = self.bot.get_user(self.user_id)
+            mention = user.mention if user else "Jogador"
+            if approved:
+                await channel.send(f"✅ {mention}, seu pedido de descanso foi **aprovado**! Seus recursos foram restaurados.")
+            else:
+                await channel.send(f"❌ {mention}, seu pedido de descanso foi **negado** pela Staff.")
+
+        await interaction.response.edit_message(content=f"📝 Pedido de descanso {status_txt}.", embed=None, view=self)
+
+    @ui.button(label="Permitir", style=discord.ButtonStyle.success)
+    async def permitir(self, interaction: discord.Interaction, button: ui.Button):
+        await self._resolve(interaction, True)
+
+    @ui.button(label="Negar", style=discord.ButtonStyle.danger)
+    async def negar(self, interaction: discord.Interaction, button: ui.Button):
+        await self._resolve(interaction, False)
 
 class ModalDistribuir(ui.Modal, title='Distribuir Pontos'):
     quantidade = ui.TextInput(label='Quantidade')
@@ -790,33 +852,56 @@ class PlayerSystem(commands.Cog):
 
     @commands.command(name="descansar", help="Restaura seu Reiryoku ao máximo e limpa cooldowns de Kidō, Técnicas e Potenciais.")
     async def descansar(self, ctx):
-        """Comando global de descanso para todas as raças."""
+        """Pede permissão ao dono do servidor para descansar e restaurar recursos."""
         user_id = ctx.author.id
         
         with get_connection() as conn:
-            # Verifica se existe personagem
-            char = conn.execute("SELECT 1 FROM personagens WHERE user_id = ?", (user_id,)).fetchone()
-            if not char:
+            res = conn.execute("SELECT forca FROM personagens WHERE user_id = ?", (user_id,)).fetchone()
+            if not res:
                 return await ctx.send("❌ Você não possui um personagem para descansar.")
-
-            # 1. Reset de Energia e Kido/Regen CD (kido_estado)
-            state = ensure_kido_state(user_id)
-            if state:
-                conn.execute(
-                    "UPDATE kido_estado SET reiryoku_atual = ?, cooldown = 0 WHERE user_id = ?",
-                    (state["reiryoku_max"], user_id)
-                )
-
-            # 2. Reset de Técnicas CD (tecnica_estado)
-            ensure_tecnica_state(user_id)
-            conn.execute("UPDATE tecnica_estado SET cooldown = 0 WHERE user_id = ?", (user_id,))
-
-            # 3. Reset de Potenciais CD (player_potencial)
-            conn.execute("UPDATE player_potencial SET cooldown = 0 WHERE user_id = ? AND cooldown > 0", (user_id,))
             
-            conn.commit()
+            # Coleta dados para o Embed de aprovação
+            k_state = ensure_kido_state(user_id)
+            t_state = ensure_tecnica_state(user_id)
+            pot_cd_count = conn.execute(
+                "SELECT COUNT(*) FROM player_potencial WHERE user_id = ? AND cooldown > 0", 
+                (user_id,)
+            ).fetchone()[0]
 
-        await ctx.send(f"💤 {ctx.author.mention} descansou profundamente. Reiryoku restaurado e cooldowns zerados!")
+        owner = await get_guild_owner(ctx.guild)
+        if not owner:
+            return await ctx.send("❌ Não foi possível localizar o dono do servidor para aprovar o pedido.")
+
+        # Monta o Embed para o Dono
+        embed = discord.Embed(
+            title="💤 Pedido de Descanso",
+            description=f"O jogador {ctx.author.mention} solicitou um descanso total.",
+            color=0x3498db
+        )
+        embed.add_field(name="📍 Local", value=ctx.channel.mention, inline=True)
+        embed.add_field(name="👤 Pessoa", value=f"{ctx.author} (`{ctx.author.id}`)", inline=True)
+        
+        reiryoku_txt = f"{k_state['reiryoku_atual']}/{k_state['reiryoku_max']}" if k_state else "N/A"
+        embed.add_field(name="🔋 Reiryoku Atual", value=f"`{reiryoku_txt}`", inline=False)
+        
+        cds = []
+        if k_state and k_state['cooldown'] > 0: cds.append(f"Kidō: `{k_state['cooldown']}t`")
+        if t_state and t_state['cooldown'] > 0: cds.append(f"Técnicas: `{t_state['cooldown']}t`")
+        if pot_cd_count > 0: cds.append(f"Potenciais: `{pot_cd_count} ativo(s)`")
+        
+        embed.add_field(name="⏳ Cooldowns Ativos", value="\n".join(cds) if cds else "Nenhum", inline=False)
+
+        view = RestApprovalView(self.bot, user_id, ctx.channel.id, owner.id)
+        
+        try:
+            await owner.send(embed=embed, view=view)
+        except discord.Forbidden:
+            return await ctx.send(
+                f"❌ {ctx.author.mention}, não consegui enviar o pedido ao dono ({owner.mention}). "
+                "As DMs dele estão fechadas."
+            )
+
+        await ctx.send(f"📨 {ctx.author.mention}, seu pedido de descanso foi enviado para aprovação do dono do servidor.")
 
     async def aplicar_romper_limite_completo(self, ctx, membro):
         dados = get_current_reiatsu_limit_index(membro.id)
