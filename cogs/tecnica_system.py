@@ -492,12 +492,13 @@ class TecnicaMenuView(ui.View):
     async def status(self, interaction, button):
         if not await self._guard(interaction):
             return
+        await interaction.response.defer()
         member = _resolve_member(interaction.client, interaction.guild, self.user_id)
         file, embed = await build_tecnica_image_embed(self.user_id, member)
         if not file:
             embed = build_status_embed(self.user_id)
-            return await interaction.response.edit_message(embed=embed, attachments=[], view=self)
-        await interaction.response.edit_message(embed=embed, attachments=[file], view=self)
+            return await interaction.edit_original_response(embed=embed, attachments=[], view=self)
+        await interaction.edit_original_response(embed=embed, attachments=[file], view=self)
 
     @ui.button(label="Técnicas Oficiais", style=discord.ButtonStyle.secondary, row=0)
     async def oficiais(self, interaction, button):

@@ -3,6 +3,7 @@ import re
 import discord
 import sqlite3
 import shlex
+import asyncio
 from discord.ext import commands
 from discord import ui
 from database import get_connection
@@ -55,7 +56,7 @@ def apply_potential_image(embed, media_ref):
             return None
         filename = os.path.basename(local_path)
         embed.set_image(url=f"attachment://{filename}")
-        return discord.File(local_path, filename=filename)
+        return local_path
     embed.set_image(url=media_ref)
     return None
 
@@ -70,9 +71,15 @@ def delete_local_media(ref):
 
 
 async def send_potential_embed(ctx, embed, media_ref):
-    file = apply_potential_image(embed, media_ref)
-    if file:
-        return await ctx.send(embed=embed, file=file)
+    result = apply_potential_image(embed, media_ref)
+    if isinstance(result, str): # Path local
+        filename = os.path.basename(result)
+        # Carregar arquivo de forma assíncrona para não travar
+        with open(result, 'rb') as f:
+            file_data = f.read()
+        import io
+        discord_file = discord.File(io.BytesIO(file_data), filename=filename)
+        return await ctx.send(embed=embed, file=discord_file)
     return await ctx.send(embed=embed)
 
 

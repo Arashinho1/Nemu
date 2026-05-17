@@ -147,40 +147,44 @@ class PerfilView(ui.View):
 
     @ui.button(label="Atualizar", style=discord.ButtonStyle.secondary, row=0)
     async def atualizar(self, interaction, button):
+        await interaction.response.defer()
         member = _resolve_member(interaction.client, interaction.guild, self.user_id)
         file, embed = await build_profile_image_embed(self.user_id, member, self.layout)
         if not file:
-            return await interaction.response.send_message("❌ Personagem não encontrado.", ephemeral=True)
-        await interaction.response.edit_message(embed=embed, attachments=[file], view=self)
+            return await interaction.followup.send("❌ Personagem não encontrado.", ephemeral=True)
+        await interaction.edit_original_response(embed=embed, attachments=[file], view=self)
 
     @ui.button(label="Perícias", style=discord.ButtonStyle.primary, row=1)
     async def pericias(self, interaction, button):
+        await interaction.response.defer()
         file, embed, view = build_pericia_image_embed(self.user_id, page=0, profile_layout=self.layout)
         if not file:
-            return await interaction.response.send_message("❌ Personagem não encontrado.", ephemeral=True)
-        await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
+            return await interaction.followup.send("❌ Personagem não encontrado.", ephemeral=True)
+        await interaction.edit_original_response(embed=embed, attachments=[file], view=view)
 
     @ui.button(label="Kidō", style=discord.ButtonStyle.primary, row=1)
     async def kido(self, interaction, button):
         from cogs.kido_system import KIDO_ACCESS_ERROR, KidoMenuView, build_kido_image_embed
 
+        await interaction.response.defer()
         member = _resolve_member(interaction.client, interaction.guild, self.user_id)
         file, embed = await build_kido_image_embed(self.user_id, member)
         if not file:
             if get_profile_data(self.user_id):
-                return await interaction.response.send_message(KIDO_ACCESS_ERROR, ephemeral=True)
-            return await interaction.response.send_message("❌ Personagem não encontrado.", ephemeral=True)
-        await interaction.response.edit_message(embed=embed, attachments=[file], view=KidoMenuView(self.user_id, interaction.client, from_profile=True, profile_layout=self.layout))
+                return await interaction.followup.send(KIDO_ACCESS_ERROR, ephemeral=True)
+            return await interaction.followup.send("❌ Personagem não encontrado.", ephemeral=True)
+        await interaction.edit_original_response(embed=embed, attachments=[file], view=KidoMenuView(self.user_id, interaction.client, from_profile=True, profile_layout=self.layout))
 
     @ui.button(label="Técnicas", style=discord.ButtonStyle.primary, row=1)
     async def tecnicas(self, interaction, button):
         from cogs.tecnica_system import TecnicaMenuView, build_tecnica_image_embed
 
+        await interaction.response.defer()
         member = _resolve_member(interaction.client, interaction.guild, self.user_id)
         file, embed = await build_tecnica_image_embed(self.user_id, member)
         if not file:
-            return await interaction.response.send_message("❌ Personagem não encontrado.", ephemeral=True)
-        await interaction.response.edit_message(embed=embed, attachments=[file], view=TecnicaMenuView(self.user_id, from_profile=True, profile_layout=self.layout))
+            return await interaction.followup.send("❌ Personagem não encontrado.", ephemeral=True)
+        await interaction.edit_original_response(embed=embed, attachments=[file], view=TecnicaMenuView(self.user_id, from_profile=True, profile_layout=self.layout))
 
 
 class PericiaImageView(ui.View):
@@ -209,18 +213,21 @@ class PericiaImageView(ui.View):
 
     @ui.button(label="Voltar", style=discord.ButtonStyle.secondary, row=0)
     async def prev_page(self, interaction, button):
+        await interaction.response.defer()
         file, embed, view = build_pericia_image_embed(self.user_id, self.page - 1, self.profile_layout)
-        await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
+        await interaction.edit_original_response(embed=embed, attachments=[file], view=view)
 
     @ui.button(label="Avançar", style=discord.ButtonStyle.secondary, row=0)
     async def next_page(self, interaction, button):
+        await interaction.response.defer()
         file, embed, view = build_pericia_image_embed(self.user_id, self.page + 1, self.profile_layout)
-        await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
+        await interaction.edit_original_response(embed=embed, attachments=[file], view=view)
 
     @ui.button(label="Atualizar", style=discord.ButtonStyle.secondary, row=0)
     async def refresh(self, interaction, button):
+        await interaction.response.defer()
         file, embed, view = build_pericia_image_embed(self.user_id, self.page, self.profile_layout)
-        await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
+        await interaction.edit_original_response(embed=embed, attachments=[file], view=view)
 
     @ui.button(label="Perfil", style=discord.ButtonStyle.primary, row=1)
     async def back_profile(self, interaction, button):
