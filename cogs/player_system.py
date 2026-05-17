@@ -21,7 +21,7 @@ from utils.profile_service import distribute_attribute, get_profile_data
 from utils.pericia_card import create_pericia_card
 from utils.pericia_service import investir_pericia, get_proximo_custo
 from utils.tecnica_service import use_hollow_regen, ensure_tecnica_state
-from utils.kido_service import ensure_kido_state, rest_kido
+from utils.kido_service import ensure_kido_state
 
 async def get_guild_owner(guild):
     if guild.owner:
