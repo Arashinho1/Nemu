@@ -509,7 +509,7 @@ def setup_db():
             ('kido_usos', 'tecnica_id', 'INTEGER'),
             ('kido_estado', 'ultimo_poder', 'INTEGER DEFAULT 0'),
             ('vagas', 'bloqueada', 'INTEGER DEFAULT 0'),
-            ('config_pretensao', 'anunciado', 'INTEGER DEFAULT 0')
+            ('config_pretensao', 'anunciado', 'INTEGER DEFAULT 0'),
             ('kido_tecnicas', 'criador_id', 'INTEGER'),
             ('kido_tecnicas', 'descricao', 'TEXT'),
             ('kido_tecnicas', 'dano_bonus', 'REAL'),
