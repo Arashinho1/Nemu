@@ -521,10 +521,10 @@ class VagasView(ui.View):
     async def listar_por_cat(self, interaction, cat):
         with get_connection() as conn:
             if cat: 
-                vgs = conn.execute('SELECT nome, multiplicador, bonus_fixo, atributo, limite, restricao_raca, vaga_id FROM vagas WHERE categoria = ?', (cat,)).fetchall()
+                vgs = conn.execute('SELECT nome, multiplicador, bonus_fixo, atributo, limite, restricao_raca, vaga_id, descricao FROM vagas WHERE categoria = ?', (cat,)).fetchall()
             else: 
                 # Lista Geral: Filtra para não mostrar as raças iniciais aqui
-                vgs = conn.execute('SELECT nome, multiplicador, bonus_fixo, atributo, limite, restricao_raca, vaga_id FROM vagas WHERE categoria != "Raças Iniciais"').fetchall()
+                vgs = conn.execute('SELECT nome, multiplicador, bonus_fixo, atributo, limite, restricao_raca, vaga_id, descricao FROM vagas WHERE categoria != "Raças Iniciais"').fetchall()
             
             if not vgs: return await interaction.response.send_message("❌ Categoria vazia.", ephemeral=True)
 
@@ -533,7 +533,7 @@ class VagasView(ui.View):
             current_embed = discord.Embed(title=title, color=0x9b59b6)
 
             for v in vgs:
-                nome, mult, fixo, attr, limite, rest, vid = v[0], v[1], v[2], v[3], v[4], v[5], v[6]
+                nome, mult, fixo, attr, limite, rest, vid, desc = v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]
                 # Buscar ocupantes
                 cursor = conn.cursor()
                 cursor.execute('''SELECT p.nome FROM player_vagas pv 
@@ -544,6 +544,7 @@ class VagasView(ui.View):
                 lim_str = f"{len(ocupantes)}/{limite}" if limite > 0 else f"{len(ocupantes)}/∞"
                 info = f"**ID:** `{vid}` | **Buff:** `x{mult}/+{fixo}`\n"
                 info += f"**Ocupação:** `{lim_str}`\n"
+                info += f"**Descrição:** {desc if desc else '*Sem descrição*'}\n"
                 info += f"👤: {', '.join(ocupantes) if ocupantes else '*Vazia*'}"
 
                 if len(current_embed.fields) == 10:
