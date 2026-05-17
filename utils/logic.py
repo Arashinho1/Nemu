@@ -7,6 +7,25 @@ from database import get_connection
 
 logger = logging.getLogger("nemu.logic")
 
+POTENCIAL_ATTRIBUTES = ("forca", "velocidade", "resistencia")
+POTENCIAL_ATTRIBUTE_LABELS = {
+    "forca": "Força",
+    "velocidade": "Velocidade",
+    "resistencia": "Resistência",
+}
+POTENCIAL_ATTRIBUTE_ALIASES = {
+    "forca": "forca",
+    "força": "forca",
+    "f": "forca",
+    "velocidade": "velocidade",
+    "vel": "velocidade",
+    "v": "velocidade",
+    "resistencia": "resistencia",
+    "resistência": "resistencia",
+    "res": "resistencia",
+    "r": "resistencia",
+}
+
 SPIRITUAL_POWER_LEVELS = [
     ("Básico", 1_000, 25_000),
     ("Comum", 25_001, 75_000),
@@ -108,20 +127,78 @@ def esta_na_janela_pretensao(config):
     dia_atual = str(agora.weekday())
     return (dia_atual in dias_str.split(",")) and (h_abrir <= hora_atual < h_fechar)
 
-def get_potencial_info(user_id):
+
+def normalize_potencial_attribute(value):
+    text = str(value or "").strip().lower()
+    return POTENCIAL_ATTRIBUTE_ALIASES.get(text)
+
+
+def _positive_multiplier(value):
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def get_potencial_effects(user_id):
     with get_connection() as conn:
-        pots = conn.execute('SELECT potencial, ativo, mult_override FROM player_potencial WHERE user_id = ?', (user_id,)).fetchall()
-        total_mult = 1.0
-        nomes_ativos = []
-        ativo = False
-        for nome, ativo_flag, m_override in pots:
-            base = conn.execute('SELECT multiplicador FROM potenciais WHERE nome = ?', (nome,)).fetchone()
-            if base and ativo_flag == 1:
-                eff_mult = m_override if m_override and m_override > 0 else base[0]
-                total_mult *= eff_mult
-                nomes_ativos.append(nome)
-                ativo = True
-        return total_mult, " + ".join(nomes_ativos), ativo
+        conn.row_factory = sqlite3.Row
+        pots = conn.execute(
+            """
+            SELECT pp.potencial, pp.ativo, pp.mult_override,
+                   pp.mult_forca AS player_mult_forca,
+                   pp.mult_velocidade AS player_mult_velocidade,
+                   pp.mult_resistencia AS player_mult_resistencia,
+                   p.multiplicador,
+                   p.mult_forca AS base_mult_forca,
+                   p.mult_velocidade AS base_mult_velocidade,
+                   p.mult_resistencia AS base_mult_resistencia
+            FROM player_potencial pp
+            JOIN potenciais p ON pp.potencial = p.nome
+            WHERE pp.user_id = ?
+            """,
+            (user_id,),
+        ).fetchall()
+
+    multipliers = {attr: 1.0 for attr in POTENCIAL_ATTRIBUTES}
+    source_names = {attr: [] for attr in POTENCIAL_ATTRIBUTES}
+    active_names = []
+    active = False
+
+    for pot in pots:
+        if pot["ativo"] != 1:
+            continue
+
+        active = True
+        active_names.append(pot["potencial"])
+        base_general = _positive_multiplier(pot["multiplicador"]) or 1.0
+        player_general = _positive_multiplier(pot["mult_override"])
+
+        for attr in POTENCIAL_ATTRIBUTES:
+            player_attr = _positive_multiplier(pot[f"player_mult_{attr}"])
+            base_attr = _positive_multiplier(pot[f"base_mult_{attr}"])
+            eff_mult = player_attr or player_general or base_attr or base_general
+            multipliers[attr] *= eff_mult
+            source_names[attr].append(pot["potencial"])
+
+    return {
+        "multipliers": multipliers,
+        "names": " + ".join(active_names),
+        "source_names": {attr: " + ".join(names) for attr, names in source_names.items()},
+        "active": active,
+    }
+
+
+def get_potencial_info(user_id, atributo=None):
+    effects = get_potencial_effects(user_id)
+    attr = normalize_potencial_attribute(atributo) if atributo else None
+    if attr:
+        return effects["multipliers"][attr], effects["source_names"].get(attr, ""), effects["active"]
+
+    values = list(effects["multipliers"].values())
+    total_mult = values[0] if values and all(value == values[0] for value in values) else max(values or [1.0])
+    return total_mult, effects["names"], effects["active"]
 
 async def atribuir_vaga_logica(guild, membro, nome_vaga):
     with get_connection() as conn:

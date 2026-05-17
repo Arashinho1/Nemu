@@ -2,6 +2,8 @@ import os
 import sqlite3
 import unicodedata
 
+from utils.default_vagas import DEFAULT_VAGAS
+
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rpg_bleach.db')
 
 def get_connection():
@@ -18,23 +20,23 @@ DEFAULT_PERICIAS = [
     (
         'Zanjutsu',
         'Shinigami, Vaizard',
-        'Proficiência no uso da Zanpakutō como extensão do corpo e espírito. +2% em técnicas de Zanjutsu por nível.',
+        'Arte de combate com Zanpakutō, unindo técnica, postura e conexão com a lâmina. +2% de força por nível.',
         0.02,
-        'tecnica:Zanjutsu',
+        'forca',
     ),
     (
         'Hakuda',
         'Shinigami, Vaizard',
-        'Combate corpo a corpo e pressão ofensiva sem armas. +2% em técnicas de Hakuda por nível.',
+        'Combate desarmado de curta distância, focado em golpes físicos, pressão e controle corporal. +2% de força por nível.',
         0.02,
-        'tecnica:Hakuda',
+        'forca',
     ),
     (
         'Hohō',
         'Shinigami, Vaizard',
-        'Movimentação avançada e domínio do Shunpo para esquiva e deslocamento. +2% em técnicas de Hohō por nível.',
+        'Movimentação avançada dos Shinigamis, base do Shunpo e de técnicas evasivas. +2% de velocidade por nível.',
         0.02,
-        'tecnica:Hohō',
+        'velocidade',
     ),
     (
         'Kidō',
@@ -53,14 +55,14 @@ DEFAULT_PERICIAS = [
     (
         'Lucha',
         'Hollow, Arrancar, Vaizard',
-        'Combate físico brutal de Hollows e Arrancars, focado em golpes diretos e pressão corpo a corpo. +2% de força por nível.',
+        'Combate corpo a corpo de Hollows e Arrancars, guiado por instinto, pressão e adaptação física. +2% de força por nível.',
         0.02,
         'forca',
     ),
     (
         'Hierro',
         'Hollow, Arrancar, Vaizard',
-        'Pele espiritual endurecida que reforça defesa e tolerância a dano. +2% de resistência por nível.',
+        'Pele espiritual endurecida que funciona como armadura natural contra impactos e cortes. +2% de resistência por nível.',
         0.02,
         'resistencia',
     ),
@@ -81,9 +83,9 @@ DEFAULT_PERICIAS = [
     (
         'Sonido',
         'Hollow, Arrancar, Vaizard',
-        'Movimentação instantânea de Hollows e Arrancars para investidas e evasão. +2% em técnicas de Sonido por nível.',
+        'Movimentação de alta velocidade de Hollows e Arrancars para investidas e evasão. +2% de velocidade por nível.',
         0.02,
-        'tecnica:Sonido',
+        'velocidade',
     ),
     (
         'Heilig Pfeil',
@@ -95,35 +97,35 @@ DEFAULT_PERICIAS = [
     (
         'Blut Vene',
         'Quincy',
-        'Técnica defensiva Quincy que fortalece veias espirituais e reduz dano recebido. +2% em técnicas de Blut Vene por nível.',
+        'Técnica defensiva Quincy que endurece o corpo com Reishi circulando nas veias. +2% de resistência por nível.',
         0.02,
-        'tecnica:Blut Vene',
+        'resistencia',
     ),
     (
         'Blut Arterie',
         'Quincy',
-        'Técnica ofensiva Quincy que reforça ataques com energia espiritual circulante. +2% em técnicas de Blut Arterie por nível.',
+        'Técnica ofensiva Quincy que canaliza Reishi pelas artérias para ampliar impacto e perfuração. +2% de força por nível.',
         0.02,
-        'tecnica:Blut Arterie',
+        'forca',
     ),
     (
         'Hirenkyaku',
         'Quincy',
-        'Movimentação Quincy de alta velocidade usando plataformas de Reishi. +2% em técnicas de Hirenkyaku por nível.',
+        'Movimentação Quincy de alta velocidade usando plataformas de Reishi. +2% de velocidade por nível.',
         0.02,
-        'tecnica:Hirenkyaku',
+        'velocidade',
     ),
     (
         'Vollständig',
         'Quincy',
-        'Liberação Quincy avançada que eleva a pressão espiritual e potência geral. +2% em técnicas de Vollständig por nível.',
-        0.02,
-        'tecnica:Vollständig',
+        'Forma Quincy completa que eleva o corpo por meio de uma técnica de buff. Cada nível acima do inicial concede +1 turno em Quincy: Vollständig.',
+        1.0,
+        'turnos:Quincy: Vollständig',
     ),
     (
-        'Soul',
+        'Soul Manipulation',
         'Fullbringer',
-        'Manipulação da alma de objetos e do ambiente através do Fullbring. +2% em técnicas de Soul por nível.',
+        'Manipulação da alma da matéria física para reduzir gasto e amplificar efeitos do Fullbring. +2% em técnicas de Soul por nível.',
         0.02,
         'tecnica:Soul',
     ),
@@ -137,14 +139,14 @@ DEFAULT_PERICIAS = [
     (
         'Bringer Light',
         'Fullbringer',
-        'Movimentação Fullbringer ao puxar a alma do solo para acelerar deslocamentos. +2% em técnicas de Bringer Light por nível.',
+        'Movimentação Fullbringer ao puxar a alma do solo e do ar para acelerar deslocamentos. +2% de velocidade por nível.',
         0.02,
-        'tecnica:Bringer Light',
+        'velocidade',
     ),
     (
         'Máscara',
         'Vaizard, Vizard, Visored',
-        'Controle da máscara Hollow. Cada nível acima do inicial concede +1 turno na técnica Máscara.',
+        'Controle da máscara Hollow e da pressão híbrida. Cada nível acima do inicial concede +1 turno na técnica Máscara.',
         1.0,
         'turnos:Máscara',
     ),
@@ -154,6 +156,8 @@ DEFAULT_PERICIAS = [
 PERICIA_ALIASES = {
     'heiligpfeil': ('heilingpfeil',),
     'objectaffinity': ('objectinfinity',),
+    'regen': ('regeneracion', 'regeneracao', 'highspeedregeneration'),
+    'soulmanipulation': ('soul',),
 }
 
 
@@ -398,6 +402,42 @@ def _upsert_default_tecnicas(cursor):
         )
         existing[key] = cursor.lastrowid
 
+
+def _upsert_default_vagas(cursor):
+    existing_rows = cursor.execute('SELECT nome, vaga_id FROM vagas').fetchall()
+    existing_by_name = {_pericia_key(nome): nome for nome, vaga_id in existing_rows}
+    existing_by_id = {vaga_id: nome for nome, vaga_id in existing_rows if vaga_id}
+
+    for nome, categoria, limite, vaga_id, descricao in DEFAULT_VAGAS:
+        key = _pericia_key(nome)
+        current_nome = existing_by_name.get(key) or existing_by_id.get(vaga_id)
+        if current_nome:
+            cursor.execute(
+                '''
+                UPDATE vagas
+                SET nome = ?, categoria = ?, limite = ?, vaga_id = ?, descricao = ?
+                WHERE nome = ?
+                ''',
+                (nome, categoria, limite, vaga_id, descricao, current_nome),
+            )
+            if current_nome != nome:
+                cursor.execute('UPDATE player_vagas SET vaga_nome = ? WHERE vaga_nome = ?', (nome, current_nome))
+                cursor.execute('UPDATE vagas_vinculo SET vaga_pai = ? WHERE vaga_pai = ?', (nome, current_nome))
+                cursor.execute('UPDATE vagas_vinculo SET vaga_filha = ? WHERE vaga_filha = ?', (nome, current_nome))
+            existing_by_name[key] = nome
+            existing_by_id[vaga_id] = nome
+            continue
+
+        cursor.execute(
+            '''
+            INSERT INTO vagas (nome, categoria, atributo, limite, restricao_raca, vaga_id, descricao)
+            VALUES (?, ?, 'todos', ?, 'Nenhuma', ?, ?)
+            ''',
+            (nome, categoria, limite, vaga_id, descricao),
+        )
+        existing_by_name[key] = nome
+        existing_by_id[vaga_id] = nome
+
 def setup_db():
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -415,11 +455,15 @@ def setup_db():
             pontos_pericia INTEGER DEFAULT 0)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS potenciais (
             nome TEXT PRIMARY KEY, multiplicador REAL, duracao INTEGER, cooldown INTEGER DEFAULT 0,
-            custo_ativacao INTEGER DEFAULT 0, custo_turno INTEGER DEFAULT 0)''')
+            custo_ativacao INTEGER DEFAULT 0, custo_turno INTEGER DEFAULT 0,
+            mult_forca REAL DEFAULT 0, mult_velocidade REAL DEFAULT 0,
+            mult_resistencia REAL DEFAULT 0)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS player_potencial (
             user_id INTEGER, potencial TEXT, extra REAL DEFAULT 0, ativo INTEGER DEFAULT 0,
             turnos INTEGER DEFAULT 0, cooldown INTEGER DEFAULT 0, dur_mod INTEGER DEFAULT 0,
             cd_mod INTEGER DEFAULT 0, mult_override REAL DEFAULT 0, imagem_url TEXT,
+            mult_forca REAL DEFAULT 0, mult_velocidade REAL DEFAULT 0,
+            mult_resistencia REAL DEFAULT 0,
             PRIMARY KEY (user_id, potencial))''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS vagas (
             nome TEXT PRIMARY KEY, categoria TEXT, multiplicador REAL DEFAULT 0, bonus_fixo INTEGER DEFAULT 0,
@@ -492,11 +536,17 @@ def setup_db():
             ('potenciais', 'cooldown', 'INTEGER DEFAULT 0'),
             ('potenciais', 'custo_ativacao', 'INTEGER DEFAULT 0'),
             ('potenciais', 'custo_turno', 'INTEGER DEFAULT 0'),
+            ('potenciais', 'mult_forca', 'REAL DEFAULT 0'),
+            ('potenciais', 'mult_velocidade', 'REAL DEFAULT 0'),
+            ('potenciais', 'mult_resistencia', 'REAL DEFAULT 0'),
             ('player_potencial', 'cooldown', 'INTEGER DEFAULT 0'),
             ('player_potencial', 'dur_mod', 'INTEGER DEFAULT 0'),
             ('player_potencial', 'cd_mod', 'INTEGER DEFAULT 0'),
             ('player_potencial', 'mult_override', 'REAL DEFAULT 0'),
             ('player_potencial', 'imagem_url', 'TEXT'),
+            ('player_potencial', 'mult_forca', 'REAL DEFAULT 0'),
+            ('player_potencial', 'mult_velocidade', 'REAL DEFAULT 0'),
+            ('player_potencial', 'mult_resistencia', 'REAL DEFAULT 0'),
             ('vagas', 'atributo', "TEXT DEFAULT 'todos'"),
             ('vagas', 'limite', 'INTEGER DEFAULT 0'),
             ('vagas', 'restricao_raca', 'TEXT'),
@@ -721,6 +771,7 @@ def setup_db():
             ''')
             cursor.execute('INSERT INTO schema_migrations (id) VALUES (?)', (migration_id,))
 
+        _upsert_default_vagas(cursor)
         _upsert_default_pericias(cursor)
         _upsert_default_tecnicas(cursor)
 

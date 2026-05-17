@@ -316,7 +316,7 @@ def get_reiatsu_value(user_id):
 
     vagas = get_vagas_bonus(user_id)
     pericias = get_pericia_bonuses(user_id)
-    mult_potencial, _, _ = get_potencial_info(user_id)
+    mult_potencial, _, _ = get_potencial_info(user_id, "forca")
     multiplicador = (1.0 + vagas["forca"]["mult"] + pericias.get("forca", 0.0) + pericias.get("reiatsu", 0.0)) * mult_potencial
     return calcular_reiatsu_efetiva(state["reiryoku_atual"], state["reiryoku_max"], multiplicador)
 

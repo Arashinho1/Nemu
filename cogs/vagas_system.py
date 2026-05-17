@@ -4,7 +4,7 @@ from discord import ui
 import sqlite3
 from database import get_connection
 from utils.ui_components import PaginatorView
-from cogs.potencial_system import ModalConsumoPotencial
+from cogs.potencial_system import ModalConsumoPotencial, PotencialAttrScopeView
 from utils.tecnica_service import configure_tecnica_buff, list_tecnicas
 
 
@@ -351,6 +351,16 @@ class BuffarMenuView(ui.View):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Apenas administradores podem configurar consumo.", ephemeral=True)
         await interaction.response.send_modal(ModalConsumoPotencial())
+
+    @ui.button(label="🎚️ Mult. de Potencial", style=discord.ButtonStyle.secondary)
+    async def mult_potencial(self, interaction: discord.Interaction, button: ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem configurar potenciais.", ephemeral=True)
+        await interaction.response.send_message(
+            "Escolha como configurar os multiplicadores por atributo:",
+            view=PotencialAttrScopeView(),
+            ephemeral=True,
+        )
 
 
 class SelectCargoVaga(ui.RoleSelect):

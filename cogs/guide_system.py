@@ -81,7 +81,7 @@ class PlayerGuideView(ui.View):
             "• Use `.potencial` para gerenciar os seus.\n"
             "• No menu `.potencial`, use **Configurar Imagem** para definir seu GIF/imagem pessoal.\n"
             "• Use `.p Shikai` ou `.liberar_potencial Shikai` para ativar/desativar um potencial já atribuído.\n"
-            "• **Liberação:** Ao liberar, seus atributos recebem um multiplicador massivo por tempo limitado.\n"
+            "• **Liberação:** Ao liberar, seus atributos recebem um multiplicador por tempo limitado; a Staff pode ajustar valores por atributo.\n"
             "• Após o uso, o potencial entra em *Cooldown* (tempo de recarga)."
         )
         await interaction.response.edit_message(embed=embed)
@@ -222,6 +222,8 @@ class GuideSystem(commands.Cog):
             "Atribuição (Setar)": {
                 "setar_potencial": "Atribui uma liberação (Shikai/Bankai) a um jogador.",
                 "ajustar_potencial": "Ajusta multiplicador, duração ou cooldown individual. Uso: `.ajustar_potencial @membro \"Shikai\" mult 3.0`.",
+                "config_potencial_attr": "Define multiplicador global por atributo. Também disponível no menu `.buffar` ou `.potencial`.",
+                "ajustar_potencial_attr": "Sobrescreve multiplicador por atributo de um jogador. Também disponível no menu `.buffar` ou `.potencial`.",
                 "restaura_cd": "Zera cooldowns ativos de Kidō, técnicas e potenciais de um jogador.",
                 "listar_potenciais": "Mostra uma lista técnica de todos os potenciais criados."
             },
@@ -236,7 +238,7 @@ class GuideSystem(commands.Cog):
             },
             "Criação de Conteúdo": {
                 "vagas": "Menu interativo para listar vagas e criar vagas/cargos via botão admin.",
-                "buffar": "Configura buffs por categoria de vaga, buffs de técnica e consumo de potencial.",
+                "buffar": "Configura buffs por categoria de vaga, buffs de técnica, consumo e multiplicadores de potencial.",
                 "inicial config": "Gerencia as raças iniciais do menu .criar.",
                 "config_pericia": "Painel administrativo para adicionar/listar perícias.",
                 "potencial": "Menu de potenciais; administradores recebem botões de criar/editar.",

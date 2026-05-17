@@ -7,7 +7,7 @@ from utils.logic import (
     calcular_reiatsu_maxima,
     calcular_reiryoku,
     format_reiatsu_limit,
-    get_potencial_info,
+    get_potencial_effects,
     nivel_reiatsu,
     reiatsu_cap_for_limit_index,
 )
@@ -203,10 +203,14 @@ def get_profile_data(user_id):
     with get_connection() as conn:
         vagas_bonus = get_vagas_bonus(user_id)
         pericia_bonus = get_pericia_bonuses(user_id)
-        mult_potencial, potencial_nome, potencial_ativo = get_potencial_info(user_id)
+        potencial_effects = get_potencial_effects(user_id)
+        potencial_nome = potencial_effects["names"]
+        potencial_ativo = potencial_effects["active"]
 
         def attr_payload(key, base):
             bonus = vagas_bonus[key]
+            mult_potencial = potencial_effects["multipliers"].get(key, 1.0)
+            potencial_attr_nome = potencial_effects["source_names"].get(key) or potencial_nome
             manual_mods = _get_manual_modifiers(conn, user_id, key)
             manual_flat = sum(mod["value"] for mod in manual_mods if mod["type"] == "flat")
             manual_percent = sum(mod["value"] / 100 for mod in manual_mods if mod["type"] == "percent")
@@ -216,7 +220,7 @@ def get_profile_data(user_id):
                     manual_multiplier *= mod["value"]
             mult = (1.0 + bonus["mult"] + pericia_bonus.get(key, 0.0) + manual_percent) * mult_potencial * manual_multiplier
             final = int((base + bonus["fixo"] + manual_flat) * mult)
-            modifiers = _get_structured_modifiers(conn, user_id, key, mult_potencial, potencial_nome, potencial_ativo)
+            modifiers = _get_structured_modifiers(conn, user_id, key, mult_potencial, potencial_attr_nome, potencial_ativo)
             return {
                 "key": key,
                 "label": ATTRIBUTES[key],
@@ -246,7 +250,7 @@ def get_profile_data(user_id):
     reiryoku = _sync_reiryoku_state(user_id, reiryoku_max)
     reiatsu_multiplier = (
         1.0 + vagas_bonus["forca"]["mult"] + pericia_bonus.get("forca", 0.0) + pericia_bonus.get("reiatsu", 0.0)
-    ) * mult_potencial
+    ) * potencial_effects["multipliers"].get("forca", 1.0)
     reiatsu_max = calcular_reiatsu_maxima(reiryoku_max, reiatsu_multiplier)
     reiatsu = calcular_reiatsu_efetiva(reiryoku, reiryoku_max, reiatsu_multiplier)
     cap = reiatsu_cap_for_limit_index(limite_idx)

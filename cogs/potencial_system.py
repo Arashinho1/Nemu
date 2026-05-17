@@ -10,6 +10,11 @@ from database import get_connection
 from utils.permissions import guild_owner_only, is_guild_owner
 from utils.ui_components import PaginatorView
 from utils.kido_service import ensure_kido_state
+from utils.logic import (
+    POTENCIAL_ATTRIBUTES,
+    POTENCIAL_ATTRIBUTE_LABELS,
+    normalize_potencial_attribute,
+)
 
 
 LOCAL_MEDIA_PREFIX = "local:"
@@ -17,6 +22,64 @@ POTENCIAL_MEDIA_DIR = os.path.abspath(
     os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "potenciais")
 )
 ALLOWED_MEDIA_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
+def _positive_multiplier(value):
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _format_multiplier(value):
+    return f"x{float(value or 0):g}"
+
+
+def _format_raw_multiplier(value):
+    return f"{float(value or 0):g}"
+
+
+def _parse_multiplier_field(value, current=0):
+    text = str(value or "").strip().lower().replace(",", ".")
+    if not text:
+        return float(current or 0)
+    if text.startswith("x"):
+        text = text[1:].strip()
+    number = float(text)
+    if number < 0:
+        raise ValueError("Multiplicadores não podem ser negativos.")
+    return number
+
+
+def _effective_multiplier_map(row):
+    base_general = _positive_multiplier(row["multiplicador"]) or 1.0
+    player_general = _positive_multiplier(row["mult_override"]) if "mult_override" in row.keys() else None
+    result = {}
+
+    for attr in POTENCIAL_ATTRIBUTES:
+        player_key = f"player_mult_{attr}"
+        base_key = f"base_mult_{attr}"
+        player_attr = _positive_multiplier(row[player_key]) if player_key in row.keys() else None
+        base_attr = _positive_multiplier(row[base_key]) if base_key in row.keys() else None
+        result[attr] = player_attr or player_general or base_attr or base_general
+
+    return result
+
+
+def _format_potencial_multipliers(row):
+    base_general = _positive_multiplier(row["multiplicador"]) or 1.0
+    player_general = _positive_multiplier(row["mult_override"]) if "mult_override" in row.keys() else None
+    general = player_general or base_general
+    effective = _effective_multiplier_map(row)
+    details = [
+        f"{POTENCIAL_ATTRIBUTE_LABELS[attr]} `{_format_multiplier(mult)}`"
+        for attr, mult in effective.items()
+        if mult != general
+    ]
+    if not details:
+        return f"`{_format_multiplier(general)}`"
+    return f"Geral `{_format_multiplier(general)}`\n" + " | ".join(details)
 
 
 def is_media_url(url):
@@ -267,6 +330,238 @@ class PotencialImagemView(ui.View):
         super().__init__(timeout=120)
         self.add_item(PotencialImagemSelect(user_id, potenciais))
 
+
+class PotencialAttrModal(ui.Modal):
+    def __init__(self, potencial, current_values, player_id=None):
+        title = f"Multiplicadores de {potencial}"[:45]
+        super().__init__(title=title)
+        self.potencial = potencial
+        self.player_id = player_id
+        self.current_values = current_values
+        self.inputs = {}
+
+        for attr in POTENCIAL_ATTRIBUTES:
+            field = ui.TextInput(
+                label=f"{POTENCIAL_ATTRIBUTE_LABELS[attr]} (0 = padrão)",
+                placeholder="Ex: 3.0",
+                default=_format_raw_multiplier(current_values.get(attr, 0)),
+                required=False,
+                max_length=12,
+            )
+            self.inputs[attr] = field
+            self.add_item(field)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            values = {
+                attr: _parse_multiplier_field(self.inputs[attr].value, self.current_values.get(attr, 0))
+                for attr in POTENCIAL_ATTRIBUTES
+            }
+        except ValueError as e:
+            return await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+
+        if self.player_id:
+            with get_connection() as conn:
+                exists = conn.execute(
+                    "SELECT 1 FROM player_potencial WHERE user_id = ? AND potencial = ?",
+                    (self.player_id, self.potencial),
+                ).fetchone()
+                if not exists:
+                    return await interaction.response.send_message(
+                        f"❌ O player selecionado não possui `{self.potencial}`.",
+                        ephemeral=True,
+                    )
+                conn.execute(
+                    """
+                    UPDATE player_potencial
+                    SET mult_forca = ?, mult_velocidade = ?, mult_resistencia = ?
+                    WHERE user_id = ? AND potencial = ?
+                    """,
+                    (
+                        values["forca"],
+                        values["velocidade"],
+                        values["resistencia"],
+                        self.player_id,
+                        self.potencial,
+                    ),
+                )
+                conn.commit()
+            alvo = f" de <@{self.player_id}>"
+        else:
+            with get_connection() as conn:
+                exists = conn.execute("SELECT 1 FROM potenciais WHERE nome = ?", (self.potencial,)).fetchone()
+                if not exists:
+                    return await interaction.response.send_message(
+                        f"❌ Potencial `{self.potencial}` não encontrado.",
+                        ephemeral=True,
+                    )
+                conn.execute(
+                    """
+                    UPDATE potenciais
+                    SET mult_forca = ?, mult_velocidade = ?, mult_resistencia = ?
+                    WHERE nome = ?
+                    """,
+                    (values["forca"], values["velocidade"], values["resistencia"], self.potencial),
+                )
+                conn.commit()
+            alvo = " global"
+
+        detalhes = " | ".join(
+            f"{POTENCIAL_ATTRIBUTE_LABELS[attr]} `{_format_multiplier(value)}`"
+            if value > 0 else f"{POTENCIAL_ATTRIBUTE_LABELS[attr]} `padrão`"
+            for attr, value in values.items()
+        )
+        await interaction.response.send_message(
+            f"✅ Multiplicadores{alvo} de `{self.potencial}` atualizados:\n{detalhes}",
+            ephemeral=True,
+        )
+
+
+class PotencialGlobalAttrSelect(ui.Select):
+    def __init__(self, potenciais):
+        self.potenciais = {str(index): pot for index, pot in enumerate(potenciais[:25])}
+        options = [
+            discord.SelectOption(
+                label=pot["nome"][:100],
+                value=str(index),
+                description=_format_potencial_multipliers(pot).replace("`", "").replace("\n", " | ")[:100],
+            )
+            for index, pot in enumerate(potenciais[:25])
+        ]
+        super().__init__(placeholder="Escolha o potencial global...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem configurar potenciais.", ephemeral=True)
+        pot = self.potenciais[self.values[0]]
+        current = {
+            "forca": pot["base_mult_forca"] or 0,
+            "velocidade": pot["base_mult_velocidade"] or 0,
+            "resistencia": pot["base_mult_resistencia"] or 0,
+        }
+        await interaction.response.send_modal(PotencialAttrModal(pot["nome"], current))
+
+
+class PotencialGlobalAttrView(ui.View):
+    def __init__(self, potenciais):
+        super().__init__(timeout=120)
+        self.add_item(PotencialGlobalAttrSelect(potenciais))
+
+
+class PotencialPlayerTargetSelect(ui.UserSelect):
+    def __init__(self):
+        super().__init__(placeholder="Escolha o player...", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem configurar potenciais.", ephemeral=True)
+        target = self.values[0]
+        with get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            potenciais = conn.execute(
+                """
+                SELECT pp.potencial, pp.mult_override,
+                       pp.mult_forca AS player_mult_forca,
+                       pp.mult_velocidade AS player_mult_velocidade,
+                       pp.mult_resistencia AS player_mult_resistencia,
+                       p.multiplicador,
+                       p.mult_forca AS base_mult_forca,
+                       p.mult_velocidade AS base_mult_velocidade,
+                       p.mult_resistencia AS base_mult_resistencia
+                FROM player_potencial pp
+                JOIN potenciais p ON pp.potencial = p.nome
+                WHERE pp.user_id = ?
+                ORDER BY pp.potencial COLLATE NOCASE
+                """,
+                (target.id,),
+            ).fetchall()
+
+        if not potenciais:
+            return await interaction.response.send_message(f"❌ {target.mention} não possui potenciais.", ephemeral=True)
+        await interaction.response.send_message(
+            f"Escolha o potencial de {target.mention}:",
+            view=PotencialPlayerAttrView(target.id, potenciais),
+            ephemeral=True,
+        )
+
+
+class PotencialPlayerTargetView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(PotencialPlayerTargetSelect())
+
+
+class PotencialPlayerAttrSelect(ui.Select):
+    def __init__(self, player_id, potenciais):
+        self.player_id = player_id
+        self.potenciais = {str(index): pot for index, pot in enumerate(potenciais[:25])}
+        options = [
+            discord.SelectOption(
+                label=pot["potencial"][:100],
+                value=str(index),
+                description=_format_potencial_multipliers(pot).replace("`", "").replace("\n", " | ")[:100],
+            )
+            for index, pot in enumerate(potenciais[:25])
+        ]
+        super().__init__(placeholder="Escolha o potencial do player...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem configurar potenciais.", ephemeral=True)
+        pot = self.potenciais[self.values[0]]
+        current = {
+            "forca": pot["player_mult_forca"] or 0,
+            "velocidade": pot["player_mult_velocidade"] or 0,
+            "resistencia": pot["player_mult_resistencia"] or 0,
+        }
+        await interaction.response.send_modal(PotencialAttrModal(pot["potencial"], current, self.player_id))
+
+
+class PotencialPlayerAttrView(ui.View):
+    def __init__(self, player_id, potenciais):
+        super().__init__(timeout=120)
+        self.add_item(PotencialPlayerAttrSelect(player_id, potenciais))
+
+
+class PotencialAttrScopeView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @ui.button(label="🌐 Global", style=discord.ButtonStyle.primary)
+    async def global_attr(self, interaction: discord.Interaction, button: ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem configurar potenciais.", ephemeral=True)
+        with get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            potenciais = conn.execute(
+                """
+                SELECT nome, nome AS potencial, multiplicador, 0 AS mult_override,
+                       mult_forca AS base_mult_forca,
+                       mult_velocidade AS base_mult_velocidade,
+                       mult_resistencia AS base_mult_resistencia
+                FROM potenciais
+                ORDER BY nome COLLATE NOCASE
+                """
+            ).fetchall()
+        if not potenciais:
+            return await interaction.response.send_message("❌ Nenhum potencial criado no sistema.", ephemeral=True)
+        await interaction.response.send_message(
+            "Escolha o potencial que receberá multiplicadores por atributo:",
+            view=PotencialGlobalAttrView(potenciais),
+            ephemeral=True,
+        )
+
+    @ui.button(label="👤 Por Player", style=discord.ButtonStyle.secondary)
+    async def player_attr(self, interaction: discord.Interaction, button: ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem configurar potenciais.", ephemeral=True)
+        await interaction.response.send_message(
+            "Escolha o player que receberá o ajuste individual:",
+            view=PotencialPlayerTargetView(),
+            ephemeral=True,
+        )
+
+
 class PotencialView(ui.View):
     def __init__(self, user_id, is_admin=False, is_owner=False):
         super().__init__(timeout=60)
@@ -283,6 +578,10 @@ class PotencialView(ui.View):
         btn_edit.callback = self.admin_edit_callback
         self.add_item(btn_edit)
 
+        btn_attr = ui.Button(label="🎚️ Mult. Atributos", style=discord.ButtonStyle.secondary)
+        btn_attr.callback = self.admin_attr_callback
+        self.add_item(btn_attr)
+
         if not is_owner:
             return
         btn_delete = ui.Button(label="🗑️ Deletar Potencial", style=discord.ButtonStyle.danger)
@@ -298,6 +597,15 @@ class PotencialView(ui.View):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Apenas administradores podem usar este botão.", ephemeral=True)
         await interaction.response.send_modal(ModalPotencial("Editar Potencial", True))
+
+    async def admin_attr_callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem usar este botão.", ephemeral=True)
+        await interaction.response.send_message(
+            "Escolha como configurar os multiplicadores por atributo:",
+            view=PotencialAttrScopeView(),
+            ephemeral=True,
+        )
 
     async def admin_delete_callback(self, interaction: discord.Interaction):
         if not is_guild_owner(interaction.user, interaction.guild):
@@ -333,20 +641,38 @@ class PotencialView(ui.View):
     @ui.button(label="📖 Ver Meus Potenciais", style=discord.ButtonStyle.primary)
     async def my_pots(self, interaction, button):
         with get_connection() as conn:
-            res = conn.execute('''SELECT p.potencial, p.ativo, p.cooldown, pots.multiplicador, p.imagem_url,
-                                         pots.custo_ativacao, pots.custo_turno
-                                FROM player_potencial p JOIN potenciais pots ON p.potencial = pots.nome 
-                                WHERE p.user_id = ?''', (interaction.user.id,)).fetchall()
+            conn.row_factory = sqlite3.Row
+            res = conn.execute(
+                """
+                SELECT p.potencial, p.ativo, p.cooldown, p.mult_override,
+                       p.mult_forca AS player_mult_forca,
+                       p.mult_velocidade AS player_mult_velocidade,
+                       p.mult_resistencia AS player_mult_resistencia,
+                       p.imagem_url, pots.multiplicador,
+                       pots.mult_forca AS base_mult_forca,
+                       pots.mult_velocidade AS base_mult_velocidade,
+                       pots.mult_resistencia AS base_mult_resistencia,
+                       pots.custo_ativacao, pots.custo_turno
+                FROM player_potencial p
+                JOIN potenciais pots ON p.potencial = pots.nome
+                WHERE p.user_id = ?
+                """,
+                (interaction.user.id,),
+            ).fetchall()
         
         if not res:
             return await interaction.response.send_message("❌ Você não possui potenciais registrados.", ephemeral=True)
         
         embed = discord.Embed(title="🔥 Seus Potenciais", color=0xe67e22)
-        for nome, ativo, cd, mult, imagem_url, custo_ativacao, custo_turno in res:
-            status = "ATIVO 🔥" if ativo else (f"Recarga: {cd}t" if cd > 0 else "PRONTO ✅")
-            midia = "\nImagem/GIF: ✅" if imagem_url else "\nImagem/GIF: ❌"
-            consumo = f"\nReiryoku: ativação `{custo_ativacao or 0}` | turno `{custo_turno or 0}`"
-            embed.add_field(name=nome, value=f"Multiplicador: `{mult}x`\nStatus: {status}{consumo}{midia}", inline=False)
+        for pot in res:
+            status = "ATIVO 🔥" if pot["ativo"] else (f"Recarga: {pot['cooldown']}t" if pot["cooldown"] > 0 else "PRONTO ✅")
+            midia = "\nImagem/GIF: ✅" if pot["imagem_url"] else "\nImagem/GIF: ❌"
+            consumo = f"\nReiryoku: ativação `{pot['custo_ativacao'] or 0}` | turno `{pot['custo_turno'] or 0}`"
+            embed.add_field(
+                name=pot["potencial"],
+                value=f"Multiplicador: {_format_potencial_multipliers(pot)}\nStatus: {status}{consumo}{midia}",
+                inline=False,
+            )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class PotencialSystem(commands.Cog):
@@ -370,7 +696,14 @@ class PotencialSystem(commands.Cog):
             dados = conn.execute(
                 """
                 SELECT pp.potencial, pp.ativo, pp.cooldown, pp.dur_mod, pp.cd_mod, pp.mult_override,
-                       pp.imagem_url, p.multiplicador, p.duracao, p.cooldown AS base_cooldown,
+                       pp.mult_forca AS player_mult_forca,
+                       pp.mult_velocidade AS player_mult_velocidade,
+                       pp.mult_resistencia AS player_mult_resistencia,
+                       pp.imagem_url, p.multiplicador,
+                       p.mult_forca AS base_mult_forca,
+                       p.mult_velocidade AS base_mult_velocidade,
+                       p.mult_resistencia AS base_mult_resistencia,
+                       p.duracao, p.cooldown AS base_cooldown,
                        p.custo_ativacao, p.custo_turno
                 FROM player_potencial pp
                 JOIN potenciais p ON pp.potencial = p.nome
@@ -405,7 +738,7 @@ class PotencialSystem(commands.Cog):
                 return await ctx.send(f"⏳ `{dados['potencial']}` está em recarga por mais `{dados['cooldown']}` turno(s).")
 
             turnos = max(1, (dados["duracao"] or 0) + (dados["dur_mod"] or 0))
-            multiplicador = dados["mult_override"] if dados["mult_override"] and dados["mult_override"] > 0 else dados["multiplicador"]
+            multiplicador_texto = _format_potencial_multipliers(dados)
             custo_ativacao = max(0, dados["custo_ativacao"] or 0)
             state = ensure_kido_state(ctx.author.id)
             if not state:
@@ -435,7 +768,7 @@ class PotencialSystem(commands.Cog):
             description=f"{ctx.author.mention} liberou **{dados['potencial']}**.",
             color=0xe67e22,
         )
-        embed.add_field(name="Multiplicador", value=f"`x{multiplicador}`", inline=True)
+        embed.add_field(name="Multiplicador", value=multiplicador_texto, inline=True)
         embed.add_field(name="Duração", value=f"`{turnos}` turno(s)", inline=True)
         if custo_ativacao > 0 or dados["custo_turno"]:
             restante = max(0, state["reiryoku_atual"] - custo_ativacao)
@@ -646,6 +979,109 @@ class PotencialSystem(commands.Cog):
 
         await ctx.send(f"✅ `{potencial['potencial']}` de {membro.mention} ajustado: {detalhe}.")
 
+    @commands.command(
+        name="config_potencial_attr",
+        aliases=["setar_potencial_attr", "potencial_attr"],
+        help='(Admin) Ajusta multiplicador global por atributo. Uso: .config_potencial_attr "Shikai" forca 3.0',
+    )
+    @commands.has_permissions(administrator=True)
+    async def config_potencial_attr(self, ctx, *, ajuste: str):
+        try:
+            partes = shlex.split(ajuste)
+        except ValueError:
+            return await ctx.send('❌ Não entendi o ajuste. Use: `.config_potencial_attr "Shikai" forca 3.0`.')
+
+        if len(partes) < 3:
+            return await ctx.send('❌ Use: `.config_potencial_attr "Shikai" <forca|velocidade|resistencia> valor`.')
+
+        nome = " ".join(partes[:-2])
+        atributo = normalize_potencial_attribute(partes[-2])
+        if not atributo:
+            return await ctx.send("❌ Atributo inválido. Use `forca`, `velocidade` ou `resistencia`.")
+
+        try:
+            valor = float(partes[-1])
+        except ValueError:
+            return await ctx.send("❌ Valor inválido. Use números como `3.0`, `2.5` ou `0` para limpar.")
+        if valor < 0:
+            return await ctx.send("❌ O multiplicador por atributo não pode ser negativo.")
+
+        coluna = f"mult_{atributo}"
+        with get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            potencial = conn.execute(
+                "SELECT nome, multiplicador FROM potenciais WHERE LOWER(nome) = LOWER(?)",
+                (nome,),
+            ).fetchone()
+            if not potencial:
+                return await ctx.send(f"❌ Potencial `{nome}` não encontrado.")
+
+            conn.execute(f"UPDATE potenciais SET {coluna} = ? WHERE nome = ?", (valor, potencial["nome"]))
+            conn.commit()
+
+        label = POTENCIAL_ATTRIBUTE_LABELS[atributo]
+        if valor == 0:
+            detalhe = f"{label} voltou ao multiplicador geral `{_format_multiplier(potencial['multiplicador'])}`"
+        else:
+            detalhe = f"{label} agora usa `{_format_multiplier(valor)}`"
+        await ctx.send(f"✅ `{potencial['nome']}` atualizado: {detalhe}.")
+
+    @commands.command(
+        name="ajustar_potencial_attr",
+        aliases=["ajustar_pot_attr"],
+        help='(Admin) Ajusta multiplicador por atributo de um player. Uso: .ajustar_potencial_attr @membro "Shikai" forca 3.0',
+    )
+    @commands.has_permissions(administrator=True)
+    async def ajustar_potencial_attr(self, ctx, membro: discord.Member, *, ajuste: str):
+        try:
+            partes = shlex.split(ajuste)
+        except ValueError:
+            return await ctx.send('❌ Não entendi o ajuste. Use: `.ajustar_potencial_attr @membro "Shikai" forca 3.0`.')
+
+        if len(partes) < 3:
+            return await ctx.send('❌ Use: `.ajustar_potencial_attr @membro "Shikai" <forca|velocidade|resistencia> valor`.')
+
+        nome = " ".join(partes[:-2])
+        atributo = normalize_potencial_attribute(partes[-2])
+        if not atributo:
+            return await ctx.send("❌ Atributo inválido. Use `forca`, `velocidade` ou `resistencia`.")
+
+        try:
+            valor = float(partes[-1])
+        except ValueError:
+            return await ctx.send("❌ Valor inválido. Use números como `3.0`, `2.5` ou `0` para limpar.")
+        if valor < 0:
+            return await ctx.send("❌ O multiplicador por atributo não pode ser negativo.")
+
+        coluna = f"mult_{atributo}"
+        with get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            potencial = conn.execute(
+                """
+                SELECT pp.potencial, p.multiplicador, p.mult_forca, p.mult_velocidade, p.mult_resistencia
+                FROM player_potencial pp
+                JOIN potenciais p ON pp.potencial = p.nome
+                WHERE pp.user_id = ? AND LOWER(pp.potencial) = LOWER(?)
+                """,
+                (membro.id, nome),
+            ).fetchone()
+            if not potencial:
+                return await ctx.send(f"❌ {membro.mention} não possui o potencial `{nome}`.")
+
+            conn.execute(
+                f"UPDATE player_potencial SET {coluna} = ? WHERE user_id = ? AND potencial = ?",
+                (valor, membro.id, potencial["potencial"]),
+            )
+            conn.commit()
+
+        label = POTENCIAL_ATTRIBUTE_LABELS[atributo]
+        fallback = _positive_multiplier(potencial[f"mult_{atributo}"]) or _positive_multiplier(potencial["multiplicador"]) or 1.0
+        if valor == 0:
+            detalhe = f"{label} voltou ao padrão `{_format_multiplier(fallback)}`"
+        else:
+            detalhe = f"{label} agora usa `{_format_multiplier(valor)}`"
+        await ctx.send(f"✅ `{potencial['potencial']}` de {membro.mention} ajustado: {detalhe}.")
+
     @commands.command(help="(Dono) Remove slots de potencial de um player.")
     @guild_owner_only()
     async def remover_slot_potencial(self, ctx, membro: discord.Member, qtd: int = 1):
@@ -694,7 +1130,18 @@ class PotencialSystem(commands.Cog):
     async def list_all(self, ctx):
         """Lista técnica de todos os potenciais criados."""
         with get_connection() as conn:
-            pots = conn.execute('SELECT nome, multiplicador, duracao, cooldown, custo_ativacao, custo_turno FROM potenciais').fetchall()
+            conn.row_factory = sqlite3.Row
+            pots = conn.execute(
+                """
+                SELECT nome, nome AS potencial, multiplicador, 0 AS mult_override,
+                       mult_forca AS base_mult_forca,
+                       mult_velocidade AS base_mult_velocidade,
+                       mult_resistencia AS base_mult_resistencia,
+                       duracao, cooldown, custo_ativacao, custo_turno
+                FROM potenciais
+                ORDER BY nome COLLATE NOCASE
+                """
+            ).fetchall()
         
         if not pots: return await ctx.send("❌ Nenhum potencial no banco.")
         
@@ -705,8 +1152,11 @@ class PotencialSystem(commands.Cog):
                 embeds.append(current)
                 current = discord.Embed(title="📋 Todos os Potenciais (cont.)", color=0x2c3e50)
             current.add_field(
-                name=p[0],
-                value=f"Mult: `{p[1]}` | Dur: `{p[2]}t` | CD: `{p[3]}t` | Reiryoku: `{p[4] or 0}/{p[5] or 0}`",
+                name=p["nome"],
+                value=(
+                    f"Mult: {_format_potencial_multipliers(p)} | Dur: `{p['duracao']}t` | "
+                    f"CD: `{p['cooldown']}t` | Reiryoku: `{p['custo_ativacao'] or 0}/{p['custo_turno'] or 0}`"
+                ),
                 inline=False,
             )
         
