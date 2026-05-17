@@ -408,17 +408,22 @@ def _upsert_default_vagas(cursor):
     existing_by_name = {_pericia_key(nome): nome for nome, vaga_id in existing_rows}
     existing_by_id = {vaga_id: nome for nome, vaga_id in existing_rows if vaga_id}
 
-    for nome, categoria, limite, vaga_id, descricao in DEFAULT_VAGAS:
+    for vaga in DEFAULT_VAGAS:
+        if len(vaga) == 5:
+            nome, categoria, limite, vaga_id, descricao = vaga
+            restricao_raca = "Shinigami" if categoria == "Zanpakuto" else "Nenhuma"
+        else:
+            nome, categoria, limite, vaga_id, descricao, restricao_raca = vaga
         key = _pericia_key(nome)
         current_nome = existing_by_name.get(key) or existing_by_id.get(vaga_id)
         if current_nome:
             cursor.execute(
                 '''
                 UPDATE vagas
-                SET nome = ?, categoria = ?, limite = ?, vaga_id = ?, descricao = ?
+                SET nome = ?, categoria = ?, limite = ?, restricao_raca = ?, vaga_id = ?, descricao = ?
                 WHERE nome = ?
                 ''',
-                (nome, categoria, limite, vaga_id, descricao, current_nome),
+                (nome, categoria, limite, restricao_raca, vaga_id, descricao, current_nome),
             )
             if current_nome != nome:
                 cursor.execute('UPDATE player_vagas SET vaga_nome = ? WHERE vaga_nome = ?', (nome, current_nome))
@@ -431,9 +436,9 @@ def _upsert_default_vagas(cursor):
         cursor.execute(
             '''
             INSERT INTO vagas (nome, categoria, atributo, limite, restricao_raca, vaga_id, descricao)
-            VALUES (?, ?, 'todos', ?, 'Nenhuma', ?, ?)
+            VALUES (?, ?, 'todos', ?, ?, ?, ?)
             ''',
-            (nome, categoria, limite, vaga_id, descricao),
+            (nome, categoria, limite, restricao_raca, vaga_id, descricao),
         )
         existing_by_name[key] = nome
         existing_by_id[vaga_id] = nome
@@ -448,6 +453,7 @@ def setup_db():
         cursor.execute('''CREATE TABLE IF NOT EXISTS config_pretensao (
             id INTEGER PRIMARY KEY CHECK (id = 1), canal_id INTEGER, hora_abrir TEXT DEFAULT '19:00',
             hora_fechar TEXT DEFAULT '22:00', dias_semana TEXT DEFAULT '0,1,2,3,4,5,6', anunciado INTEGER DEFAULT 0)''')
+        cursor.execute("INSERT OR IGNORE INTO config_pretensao (id) VALUES (1)")
         cursor.execute('''CREATE TABLE IF NOT EXISTS personagens (
             user_id INTEGER PRIMARY KEY, nome TEXT, raca TEXT, forca INTEGER DEFAULT 0,
             velocidade INTEGER DEFAULT 0, resistencia INTEGER DEFAULT 0, pontos_livres INTEGER DEFAULT 0,
@@ -939,6 +945,25 @@ def get_canal_comandos():
 def get_config_pretensao():
     with get_connection() as conn:
         return conn.execute('SELECT canal_id, hora_abrir, hora_fechar, dias_semana FROM config_pretensao WHERE id = 1').fetchone()
+
+def set_config_pretensao_canal(canal_id):
+    with get_connection() as conn:
+        conn.execute('INSERT OR IGNORE INTO config_pretensao (id) VALUES (1)')
+        conn.execute('UPDATE config_pretensao SET canal_id = ? WHERE id = 1', (canal_id,))
+        conn.commit()
+
+def set_config_pretensao_horarios(hora_abrir, hora_fechar, dias_semana):
+    with get_connection() as conn:
+        conn.execute('INSERT OR IGNORE INTO config_pretensao (id) VALUES (1)')
+        conn.execute(
+            '''
+            UPDATE config_pretensao
+            SET hora_abrir = ?, hora_fechar = ?, dias_semana = ?
+            WHERE id = 1
+            ''',
+            (hora_abrir, hora_fechar, dias_semana)
+        )
+        conn.commit()
 
 def get_vagas_bonus(user_id):
     with get_connection() as conn:

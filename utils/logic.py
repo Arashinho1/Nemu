@@ -4,6 +4,7 @@ import logging
 import math
 import sqlite3
 from database import get_connection
+from utils.race_restrictions import normalize_race_restriction, race_restriction_allows
 
 logger = logging.getLogger("nemu.logic")
 
@@ -25,6 +26,7 @@ POTENCIAL_ATTRIBUTE_ALIASES = {
     "res": "resistencia",
     "r": "resistencia",
 }
+RACE_CATEGORIES = ("Raças Iniciais", "Raças Normais", "Raças Especiais")
 
 SPIRITUAL_POWER_LEVELS = [
     ("Básico", 1_000, 25_000),
@@ -200,6 +202,28 @@ def get_potencial_info(user_id, atributo=None):
     total_mult = values[0] if values and all(value == values[0] for value in values) else max(values or [1.0])
     return total_mult, effects["names"], effects["active"]
 
+
+def _effective_vaga_restriction(categoria, restricao):
+    if categoria == "Zanpakuto":
+        return "Shinigami"
+    return normalize_race_restriction(restricao)
+
+
+def _player_race_sources(cursor, user_id, base_raca):
+    sources = [base_raca]
+    rows = cursor.execute(
+        '''
+        SELECT pv.vaga_nome
+        FROM player_vagas pv
+        JOIN vagas v ON pv.vaga_nome = v.nome
+        WHERE pv.user_id = ?
+          AND v.categoria IN ("Raças Iniciais", "Raças Normais", "Raças Especiais")
+        ''',
+        (user_id,),
+    ).fetchall()
+    sources.extend(row[0] for row in rows if row and row[0])
+    return sources
+
 async def atribuir_vaga_logica(guild, membro, nome_vaga):
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -211,7 +235,14 @@ async def atribuir_vaga_logica(guild, membro, nome_vaga):
 
         role_id, limite, restricao, categoria = res
 
-        if categoria in ["Raças Iniciais", "Raças Normais", "Raças Especiais"]:
+        restricao = _effective_vaga_restriction(categoria, restricao)
+        if restricao and restricao.lower() != "nenhuma" and restricao.lower() != "todos":
+            p_raca = cursor.execute('SELECT raca FROM personagens WHERE user_id = ?', (membro.id,)).fetchone()
+            race_sources = _player_race_sources(cursor, membro.id, p_raca[0] if p_raca else None)
+            if not p_raca or not race_restriction_allows(restricao, race_sources):
+                return False, f"❌ Restrito a: {restricao}."
+
+        if categoria in RACE_CATEGORIES:
             racas_antigas = cursor.execute('''
                 SELECT pv.vaga_nome, v.role_id FROM player_vagas pv
                 JOIN vagas v ON pv.vaga_nome = v.nome
@@ -223,11 +254,6 @@ async def atribuir_vaga_logica(guild, membro, nome_vaga):
                     if role_old: await membro.remove_roles(role_old)
                 cursor.execute('DELETE FROM player_vagas WHERE user_id = ? AND vaga_nome = ?', (membro.id, r_nome))
             cursor.execute('UPDATE personagens SET raca = ? WHERE user_id = ?', (nome_vaga, membro.id))
-
-        if restricao and restricao.lower() != "nenhuma":
-            p_raca = cursor.execute('SELECT raca FROM personagens WHERE user_id = ?', (membro.id,)).fetchone()
-            if not p_raca or p_raca[0].lower() != restricao.lower():
-                return False, f"❌ Restrito a: {restricao}."
 
         if limite > 0:
             atual = cursor.execute('SELECT COUNT(*) FROM player_vagas WHERE vaga_nome = ?', (nome_vaga,)).fetchone()[0]

@@ -91,6 +91,7 @@ DEFAULT_VAGAS.extend(_build_vagas("Linhagens", "LIN", [
     ("✦ I𝕤𝕖 ⨾", "https://discord.com/channels/1494558085342298134/1498705623515398174", 1),
     ("✦ K𝕦𝕔𝕙𝕚𝕜𝕚 ⨾", "https://discord.com/channels/1494558085342298134/1498704169895329862", 2),
     ("✦ S𝕙𝕚𝕙𝕠𝕚𝕟 ⨾", "https://discord.com/channels/1494558085342298134/1498704107366518794", 2),
+    ("✦ T𝕤𝕦𝕟𝕒𝕪𝕒𝕤𝕙𝕚𝕣𝕠 ⨾", "https://discord.com/channels/1494558085342298134/1505440970924097744", 1),
 ]))
 
 DEFAULT_VAGA_IDS = {
@@ -168,9 +169,66 @@ DEFAULT_VAGA_IDS = {
     "LIN02": "Ise",
     "LIN03": "Kuchiki",
     "LIN04": "Shihoin",
+    "LIN05": "Tsunayashiro",
 }
 
+DEFAULT_VAGA_RESTRICOES = {
+    "Hierro": "Hollow, Arrancar",
+    "Falso": "Vaizard, Shinigami",
+    "Rei": "Humanos, Fullbringer",
+    "Viciado": "Todos",
+    "Intelecto": "Shinigami",
+    "True-Ress": "Hollow, Arrancar",
+    "Prodigio": "Shinigami",
+    "True-Bankai": "Shinigami",
+    "Proibido": "Shinigami, Vaizard",
+    "Reiatsu": "Todos",
+    "Dupla": "Shinigami, Vaizard",
+    "Segunda": "Hollow, Arrancar",
+    "Avançada": "Hollow, Arrancar",
+    "Shikai": "Shinigami, Vaizard",
+    "Kido": "Shinigami, Vaizard",
+    "Branco": "Hollow",
+    "Rokungai": "Shinigami",
+    "Quincy": "Humano",
+    "Injustiçado": "Humano, Fullbringer",
+    "Substituto": "Humano, Hibrido",
+    "Perfeita": "Shinigami",
+    "Kenpachi": "Shinigami",
+    "Exilado": "Shinigami, Vaizard",
+    "Deusa": "Shinigami",
+    "Lojista": "Shinigami",
+    "Capitão": "Shinigami",
+    "Tenente": "Shinigami",
+    "Solidão": "Hollow",
+    "Shiba": "Shinigami",
+    "Ise": "Shinigami",
+    "Kuchiki": "Shinigami",
+    "Shihoin": "Shinigami",
+    "Tsunayashiro": "Shinigami",
+}
+
+
+def _default_restricao(categoria, vaga_id):
+    if categoria == "Zanpakuto":
+        return "Shinigami"
+    return DEFAULT_VAGA_RESTRICOES.get(vaga_id, "Nenhuma")
+
+
+def _finalize_vaga(vaga):
+    nome, categoria, limite, vaga_id, descricao = vaga
+    vaga_id = DEFAULT_VAGA_IDS.get(vaga_id, vaga_id)
+    return (
+        nome,
+        categoria,
+        limite,
+        vaga_id,
+        descricao,
+        _default_restricao(categoria, vaga_id),
+    )
+
+
 DEFAULT_VAGAS = tuple(
-    (nome, categoria, limite, DEFAULT_VAGA_IDS.get(vaga_id, vaga_id), descricao)
-    for nome, categoria, limite, vaga_id, descricao in DEFAULT_VAGAS
+    _finalize_vaga(vaga)
+    for vaga in DEFAULT_VAGAS
 )

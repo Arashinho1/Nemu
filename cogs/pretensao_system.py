@@ -152,12 +152,7 @@ class PretensaoSetupView(ui.View):
             return await interaction.response.send_message("❌ Sem permissão.", ephemeral=True)
         
         dias_str = ",".join(sorted(self.dias_selecionados))
-        with database.get_connection() as conn:
-            conn.execute(
-                "UPDATE config_pretensao SET hora_abrir = ?, hora_fechar = ?, dias_semana = ? WHERE id = 1",
-                (self.hora_abrir, self.hora_fechar, dias_str)
-            )
-            conn.commit()
+        database.set_config_pretensao_horarios(self.hora_abrir, self.hora_fechar, dias_str)
         
         await interaction.response.edit_message(
             content="✅ **Configuração de Pretensão salva com sucesso!**",
@@ -178,9 +173,7 @@ class PretensaoSystem(commands.Cog):
     async def criar_pretensao(self, ctx, canal: discord.TextChannel = None):
         """Define o canal onde a pretensão irá ocorrer."""
         target = canal or ctx.channel
-        with database.get_connection() as conn:
-            conn.execute("UPDATE config_pretensao SET canal_id = ? WHERE id = 1", (target.id,))
-            conn.commit()
+        database.set_config_pretensao_canal(target.id)
         await ctx.send(f"🎯 Canal de Pretensão definido para {target.mention}.")
 
     @commands.command(name="setar_pretensão")
@@ -195,12 +188,7 @@ class PretensaoSystem(commands.Cog):
         if ":" not in abrir or ":" not in fechar:
             return await ctx.send("❌ Formato de hora inválido. Use HH:MM.")
 
-        with database.get_connection() as conn:
-            conn.execute(
-                "UPDATE config_pretensao SET hora_abrir = ?, hora_fechar = ?, dias_semana = ? WHERE id = 1",
-                (abrir, fechar, dias)
-            )
-            conn.commit()
+        database.set_config_pretensao_horarios(abrir, fechar, dias)
         
         dias_formatados = dias.replace("0","Seg").replace("1","Ter").replace("2","Qua").replace("3","Qui").replace("4","Sex").replace("5","Sab").replace("6","Dom")
         await ctx.send(f"🕒 **Configuração Atualizada!**\nAbertura: `{abrir}` | Fechamento: `{fechar}`\nDias: `{dias_formatados}`")
@@ -231,26 +219,27 @@ class PretensaoSystem(commands.Cog):
         deve_abrir = logic.esta_na_janela_pretensao((config['canal_id'], config['hora_abrir'], config['hora_fechar'], config['dias_semana']))
         perms = canal.overwrites_for(canal.guild.default_role)
         
-        if perms.send_messages != deve_abrir:
+        mudou_permissao = perms.send_messages != deve_abrir
+        if mudou_permissao:
             perms.send_messages = deve_abrir
             await canal.set_permissions(canal.guild.default_role, overwrite=perms)
+
+        if deve_abrir and not config['anunciado']:
+            # Anuncio Inicial
+            await canal.send(f"📢 @everyone **O SISTEMA DE PRETENSÃO COMEÇOU!** 🔓\nMandem o ID da vaga desejada abaixo.")
+            # Envia o comando .vagas automaticamente
+            vagas_cmd = self.bot.get_command("vagas")
+            ctx = await self.bot.get_context(await canal.send("⌛ Carregando lista de vagas..."))
+            await ctx.invoke(vagas_cmd)
             
-            if deve_abrir:
-                # Anuncio Inicial
-                await canal.send(f"📢 @everyone **O SISTEMA DE PRETENSÃO COMEÇOU!** 🔓\nMandem o ID da vaga desejada abaixo.")
-                # Envia o comando .vagas automaticamente
-                vagas_cmd = self.bot.get_command("vagas")
-                ctx = await self.bot.get_context(await canal.send("⌛ Carregando lista de vagas..."))
-                await ctx.invoke(vagas_cmd)
-                
-                with database.get_connection() as conn:
-                    conn.execute("UPDATE config_pretensao SET anunciado = 1 WHERE id = 1")
-                    conn.commit()
-            else:
-                await canal.send("🔒 **Sistema de Pretensão Encerrado.** O chat foi silenciado.")
-                with database.get_connection() as conn:
-                    conn.execute("UPDATE config_pretensao SET anunciado = 0 WHERE id = 1")
-                    conn.commit()
+            with database.get_connection() as conn:
+                conn.execute("UPDATE config_pretensao SET anunciado = 1 WHERE id = 1")
+                conn.commit()
+        elif not deve_abrir and config['anunciado']:
+            await canal.send("🔒 **Sistema de Pretensão Encerrado.** O chat foi silenciado.")
+            with database.get_connection() as conn:
+                conn.execute("UPDATE config_pretensao SET anunciado = 0 WHERE id = 1")
+                conn.commit()
 
     @commands.command(name="pretensão")
     async def pretensao_status(self, ctx):

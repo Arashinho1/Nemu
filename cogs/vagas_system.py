@@ -5,6 +5,7 @@ import sqlite3
 from database import get_connection
 from utils.ui_components import PaginatorView
 from cogs.potencial_system import ModalConsumoPotencial, PotencialAttrScopeView
+from utils.race_restrictions import normalize_race_restriction
 from utils.tecnica_service import configure_tecnica_buff, list_tecnicas
 
 
@@ -22,10 +23,7 @@ def parse_vaga_id_limite(value):
 
 
 def parse_restricao_raca(value):
-    if not value:
-        return "Nenhuma"
-    parts = [x.strip() for x in value.split(",")]
-    return parts[0] or "Nenhuma"
+    return normalize_race_restriction(value)
 
 
 def format_role_label(guild, role_id):
@@ -49,7 +47,7 @@ class ModalCriarVaga(ui.Modal, title='Detalhes da Vaga'):
     nome = ui.TextInput(label='Nome da Vaga', placeholder='Ex: Manipulação Perfeita')
     descricao = ui.TextInput(label='Descrição da Vaga (Opcional)', placeholder='Explique a vaga ou cole o link da thread', style=discord.TextStyle.paragraph, required=False)
     atributos = ui.TextInput(label='Atributos Afetados', placeholder='Ex: forca,velocidade ou todos', default='todos')
-    restricoes = ui.TextInput(label='Restrição de Raça', placeholder='Ex: Shinigami (Use Nenhuma se não houver)', required=False)
+    restricoes = ui.TextInput(label='Restrição de Raça', placeholder='Ex: Shinigami, Vaizard ou Todos', required=False)
     v_id_limite = ui.TextInput(label='ID e Limite', placeholder='Ex: R01, 5')
 
     def __init__(self, categoria, role_id=None):
@@ -94,7 +92,7 @@ class ModalEditarVaga(ui.Modal, title='Editar Vaga'):
         )
         self.restricoes = ui.TextInput(
             label='Restrição de Raça',
-            placeholder='Ex: Shinigami (Use Nenhuma se não houver)',
+            placeholder='Ex: Shinigami, Vaizard ou Todos',
             required=False,
             default=vaga["restricao_raca"] or "Nenhuma",
         )
