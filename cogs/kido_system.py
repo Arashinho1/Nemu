@@ -414,7 +414,7 @@ class KidoCategorySelect(ui.Select):
             discord.SelectOption(label="Bakudō", value="bakudo", description="Contenção, suporte, barreiras e selos."),
             discord.SelectOption(label="Kaidō", value="kaido", description="Cura e restauração espiritual."),
         ]
-        super().__init__(placeholder="Escolha a categoria do Kidō...", options=options)
+        super().__init__(placeholder="Escolha a categoria do Kidō...", options=options, row=0)
         self.parent_menu = parent
 
     async def callback(self, interaction):
@@ -436,7 +436,7 @@ class KidoCreateTypeSelect(ui.Select):
             options.append(discord.SelectOption(label="Oficial", value="oficial", description="Registro oficial do sistema."))
             options.append(discord.SelectOption(label="Exclusivo Sistema", value="exclusivo_global", description="Registro exclusivo global da staff."))
             options.append(discord.SelectOption(label="Proibido Sistema", value="proibido_global", description="Registro proibido global da staff."))
-        super().__init__(placeholder="Escolha a classificação do Kidō...", options=options)
+        super().__init__(placeholder="Escolha a classificação do Kidō...", options=options, row=1)
         self.parent_menu = parent
 
     async def callback(self, interaction):
@@ -448,14 +448,21 @@ class KidoCreateTypeSelect(ui.Select):
 
 
 class KidoCreateMenuView(ui.View):
-    def __init__(self, user_id, is_admin=False):
+    def __init__(self, user_id, is_admin=False, from_profile=False, profile_layout="desktop", show_back=False):
         super().__init__(timeout=180)
         self.user_id = user_id
         self.is_admin = is_admin
+        self.from_profile = from_profile
+        self.profile_layout = profile_layout
+        self.show_back = show_back
         self.categoria = None
         self.classificacao = "criado"
         self.add_item(KidoCategorySelect(self))
         self.add_item(KidoCreateTypeSelect(self))
+        if not show_back:
+            for item in list(self.children):
+                if getattr(item, "label", None) == "Voltar ao Status":
+                    self.remove_item(item)
 
     def build_embed(self, status=None):
         embed = discord.Embed(title="🖋️ Criação de Kidō", color=0x7f8cff)
@@ -483,9 +490,15 @@ class KidoCreateMenuView(ui.View):
         criador_id = None if global_record else self.user_id
         await interaction.response.send_modal(KidoCreateModal(classificacao, self.categoria, criador_id))
 
-    @ui.button(label="Abrir formulário", style=discord.ButtonStyle.secondary)
+    @ui.button(label="Abrir formulário", style=discord.ButtonStyle.secondary, row=2)
     async def criar(self, interaction, button):
         await self._open_modal(interaction)
+
+    @ui.button(label="Voltar ao Status", style=discord.ButtonStyle.secondary, row=2)
+    async def voltar_status(self, interaction, button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
+        await edit_kido_status_message(interaction, self.user_id, self.from_profile, self.profile_layout)
 
 
 class KidoStatusReturnView(ui.View):
@@ -711,6 +724,23 @@ class KidoMenuView(ui.View):
         view = KidoUseMenuView(self.user_id, self.from_profile, self.profile_layout)
         await interaction.response.edit_message(
             embed=build_kido_use_menu_embed(view),
+            attachments=[],
+            view=view,
+        )
+
+    @ui.button(label="Criar Kido", style=discord.ButtonStyle.secondary, row=1)
+    async def criar_kido(self, interaction, button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
+        view = KidoCreateMenuView(
+            self.user_id,
+            interaction.user.guild_permissions.administrator,
+            self.from_profile,
+            self.profile_layout,
+            show_back=True,
+        )
+        await interaction.response.edit_message(
+            embed=view.build_embed(),
             attachments=[],
             view=view,
         )

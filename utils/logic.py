@@ -517,6 +517,104 @@ async def _remove_vaga_from_member(cursor, guild, membro, nome_vaga, allow_initi
     return True, "✅ Removida.", removed
 
 
+def _remove_vaga_rows_without_member(cursor, user_id, nome_vaga, allow_initial=False, origem_vaga=None):
+    vaga = cursor.execute(
+        'SELECT categoria FROM vagas WHERE nome = ?',
+        (nome_vaga,),
+    ).fetchone()
+    if not vaga:
+        return []
+
+    categoria = vaga[0]
+    if categoria == "Raças Iniciais" and not allow_initial:
+        return []
+
+    if origem_vaga is None:
+        assigned = cursor.execute(
+            'SELECT 1 FROM player_vagas WHERE user_id = ? AND vaga_nome = ?',
+            (user_id, nome_vaga),
+        ).fetchone()
+    else:
+        assigned = cursor.execute(
+            '''
+            SELECT 1
+            FROM player_vagas
+            WHERE user_id = ?
+              AND vaga_nome = ?
+              AND origem_vaga = ?
+            ''',
+            (user_id, nome_vaga, origem_vaga),
+        ).fetchone()
+    if not assigned:
+        return []
+
+    removed = []
+    filhas = [
+        row[0] for row in cursor.execute(
+            '''
+            SELECT vv.vaga_filha
+            FROM vagas_vinculo vv
+            JOIN player_vagas pv ON pv.vaga_nome = vv.vaga_filha
+            WHERE vv.vaga_pai = ?
+              AND pv.user_id = ?
+              AND pv.origem_vaga = ?
+            ''',
+            (nome_vaga, user_id, nome_vaga),
+        ).fetchall()
+    ]
+    for filha in filhas:
+        removed.extend(
+            _remove_vaga_rows_without_member(
+                cursor,
+                user_id,
+                filha,
+                allow_initial=False,
+                origem_vaga=nome_vaga,
+            )
+        )
+
+    pa_removed, pp_removed = _revoke_vaga_points(cursor, user_id, nome_vaga, categoria)
+    if origem_vaga is None:
+        cursor.execute(
+            'DELETE FROM player_vagas WHERE user_id = ? AND vaga_nome = ?',
+            (user_id, nome_vaga),
+        )
+    else:
+        cursor.execute(
+            '''
+            DELETE FROM player_vagas
+            WHERE user_id = ?
+              AND vaga_nome = ?
+              AND origem_vaga = ?
+            ''',
+            (user_id, nome_vaga, origem_vaga),
+        )
+    if categoria in ("Raças Iniciais", "Raças Normais", "Raças Especiais"):
+        _sync_race_after_vaga_removal(cursor, user_id, nome_vaga)
+
+    removed.append({
+        "nome": nome_vaga,
+        "categoria": categoria,
+        "pontos_pa": pa_removed,
+        "pontos_pp": pp_removed,
+    })
+    return removed
+
+
+async def _fetch_member_for_vaga_cleanup(guild, user_id):
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    member = guild.get_member(user_id)
+    if member:
+        return member
+    try:
+        return await guild.fetch_member(user_id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return None
+
+
 async def atribuir_vaga_logica(guild, membro, nome_vaga, extra=False, origem_vaga=None):
     extra = bool(extra)
     with get_connection() as conn:
@@ -638,3 +736,83 @@ async def remover_vaga_logica(guild, membro, nome_vaga):
         if ok:
             conn.commit()
         return ok, msg, removed
+
+
+async def excluir_vaga_criada_logica(guild, nome_vaga):
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        vaga = cursor.execute(
+            '''
+            SELECT nome, categoria, role_id, COALESCE(criada, 0)
+            FROM vagas
+            WHERE nome = ?
+            ''',
+            (nome_vaga,),
+        ).fetchone()
+        if not vaga:
+            return False, "❌ Vaga não encontrada.", None
+        if not int(vaga[3] or 0):
+            return False, "❌ Apenas vagas criadas manualmente podem ser excluídas por este menu.", None
+
+        direct_user_ids = [
+            row[0] for row in cursor.execute(
+                'SELECT DISTINCT user_id FROM player_vagas WHERE vaga_nome = ?',
+                (nome_vaga,),
+            ).fetchall()
+        ]
+        removed = []
+        for user_id in direct_user_ids:
+            member = await _fetch_member_for_vaga_cleanup(guild, user_id)
+            if member:
+                ok, _, member_removed = await _remove_vaga_from_member(
+                    cursor,
+                    guild,
+                    member,
+                    nome_vaga,
+                    allow_initial=True,
+                )
+                if ok:
+                    removed.extend(member_removed)
+                continue
+            removed.extend(
+                _remove_vaga_rows_without_member(
+                    cursor,
+                    user_id,
+                    nome_vaga,
+                    allow_initial=True,
+                )
+            )
+
+        orphan_rows = cursor.execute(
+            '''
+            SELECT DISTINCT user_id, vaga_nome
+            FROM player_vagas
+            WHERE origem_vaga = ?
+            ''',
+            (nome_vaga,),
+        ).fetchall()
+        for user_id, child_name in orphan_rows:
+            removed.extend(
+                _remove_vaga_rows_without_member(
+                    cursor,
+                    user_id,
+                    child_name,
+                    allow_initial=False,
+                    origem_vaga=nome_vaga,
+                )
+            )
+
+        cursor.execute('DELETE FROM player_vaga_pontos WHERE vaga_nome = ?', (nome_vaga,))
+        cursor.execute('DELETE FROM player_vagas WHERE vaga_nome = ? OR origem_vaga = ?', (nome_vaga, nome_vaga))
+        cursor.execute('UPDATE personagens SET raca = NULL WHERE raca = ?', (nome_vaga,))
+        cursor.execute('DELETE FROM vagas_vinculo WHERE vaga_pai = ? OR vaga_filha = ?', (nome_vaga, nome_vaga))
+        cursor.execute('DELETE FROM vagas WHERE nome = ? AND COALESCE(criada, 0) = 1', (nome_vaga,))
+        conn.commit()
+
+    details = {
+        "nome": nome_vaga,
+        "categoria": vaga[1],
+        "usuarios": len(set(direct_user_ids)),
+        "removidas": removed,
+    }
+    return True, f"✅ Vaga `{nome_vaga}` excluída do sistema.", details

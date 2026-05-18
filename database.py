@@ -334,6 +334,22 @@ def _pericia_key(value):
 BLOCKED_TECNICA_VARIANTS = {_pericia_key(name) for name in BLOCKED_TECNICA_VARIANT_NAMES}
 
 
+def _default_vaga_identity_sets():
+    default_names = {_pericia_key(vaga[0]) for vaga in DEFAULT_VAGAS}
+    default_ids = {vaga[3] for vaga in DEFAULT_VAGAS if len(vaga) >= 4 and vaga[3]}
+    return default_names, default_ids
+
+
+def _mark_existing_created_vagas(cursor):
+    default_names, default_ids = _default_vaga_identity_sets()
+    for nome, vaga_id in cursor.execute('SELECT nome, vaga_id FROM vagas').fetchall():
+        is_default = _pericia_key(nome) in default_names or (vaga_id and vaga_id in default_ids)
+        cursor.execute(
+            'UPDATE vagas SET criada = ? WHERE nome = ?',
+            (0 if is_default else 1, nome),
+        )
+
+
 def _upsert_default_pericias(cursor):
     existing = {
         _pericia_key(nome): pericia_id
@@ -454,7 +470,7 @@ def _upsert_default_vagas(cursor):
             cursor.execute(
                 '''
                 UPDATE vagas
-                SET nome = ?, categoria = ?, limite = ?, restricao_raca = ?, vaga_id = ?, descricao = ?
+                SET nome = ?, categoria = ?, limite = ?, restricao_raca = ?, vaga_id = ?, descricao = ?, criada = 0
                 WHERE nome = ?
                 ''',
                 (nome, categoria, limite, restricao_raca, vaga_id, descricao, current_nome),
@@ -471,8 +487,8 @@ def _upsert_default_vagas(cursor):
 
         cursor.execute(
             '''
-            INSERT INTO vagas (nome, categoria, atributo, limite, restricao_raca, vaga_id, descricao)
-            VALUES (?, ?, 'todos', ?, ?, ?, ?)
+            INSERT INTO vagas (nome, categoria, atributo, limite, restricao_raca, vaga_id, descricao, criada)
+            VALUES (?, ?, 'todos', ?, ?, ?, ?, 0)
             ''',
             (nome, categoria, limite, restricao_raca, vaga_id, descricao),
         )
@@ -513,7 +529,8 @@ def setup_db():
             role_id INTEGER, atributo TEXT DEFAULT 'todos', limite INTEGER DEFAULT 0,
             restricao_raca TEXT, vaga_id TEXT UNIQUE, descricao TEXT, bloqueada INTEGER DEFAULT 0,
             pontos_pa_bonus INTEGER DEFAULT 0, pontos_pp_bonus INTEGER DEFAULT 0,
-            pontos_pa_inicial INTEGER DEFAULT 0, pontos_pp_inicial INTEGER DEFAULT 0)''')
+            pontos_pa_inicial INTEGER DEFAULT 0, pontos_pp_inicial INTEGER DEFAULT 0,
+            criada INTEGER DEFAULT 0)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS player_vagas (
             user_id INTEGER, vaga_nome TEXT, extra INTEGER DEFAULT 0, origem_vaga TEXT,
             FOREIGN KEY(vaga_nome) REFERENCES vagas(nome))''')
@@ -617,6 +634,7 @@ def setup_db():
             ('vagas', 'pontos_pp_bonus', 'INTEGER DEFAULT 0'),
             ('vagas', 'pontos_pa_inicial', 'INTEGER DEFAULT 0'),
             ('vagas', 'pontos_pp_inicial', 'INTEGER DEFAULT 0'),
+            ('vagas', 'criada', 'INTEGER DEFAULT 0'),
             ('player_vagas', 'extra', 'INTEGER DEFAULT 0'),
             ('player_vagas', 'origem_vaga', 'TEXT'),
             ('vagas_vinculo', 'extra', 'INTEGER DEFAULT 0'),
@@ -654,6 +672,11 @@ def setup_db():
             id TEXT PRIMARY KEY,
             applied_at TEXT DEFAULT CURRENT_TIMESTAMP
         )''')
+
+        migration_id = 'vagas_criada_flag_20260518'
+        if not cursor.execute('SELECT 1 FROM schema_migrations WHERE id = ?', (migration_id,)).fetchone():
+            _mark_existing_created_vagas(cursor)
+            cursor.execute('INSERT INTO schema_migrations (id) VALUES (?)', (migration_id,))
 
         migration_id = 'pericia_raca_heranca_defaults_20260514'
         if not cursor.execute('SELECT 1 FROM schema_migrations WHERE id = ?', (migration_id,)).fetchone():

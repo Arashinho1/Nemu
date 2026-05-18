@@ -315,7 +315,7 @@ class TecnicaCreateTypeSelect(ui.Select):
         options = [discord.SelectOption(label="Criada", value="criado", description="Técnica própria do personagem.")]
         if parent.is_admin:
             options.append(discord.SelectOption(label="Oficial", value="oficial", description="Registro oficial do sistema."))
-        super().__init__(placeholder="Escolha o tipo de técnica...", options=options)
+        super().__init__(placeholder="Escolha o tipo de técnica...", options=options, row=0)
         self.parent_menu = parent
 
     async def callback(self, interaction):
@@ -326,12 +326,19 @@ class TecnicaCreateTypeSelect(ui.Select):
 
 
 class TecnicaCreateMenuView(ui.View):
-    def __init__(self, user_id, is_admin=False):
+    def __init__(self, user_id, is_admin=False, from_profile=False, profile_layout="desktop", show_back=False):
         super().__init__(timeout=180)
         self.user_id = user_id
         self.is_admin = is_admin
+        self.from_profile = from_profile
+        self.profile_layout = profile_layout
+        self.show_back = show_back
         self.classificacao = "criado"
         self.add_item(TecnicaCreateTypeSelect(self))
+        if not show_back:
+            for item in list(self.children):
+                if getattr(item, "label", None) == "Voltar ao Status":
+                    self.remove_item(item)
 
     def build_embed(self, status=None):
         embed = discord.Embed(title="🖋️ Criação de Técnica", color=0x2ecc71)
@@ -341,7 +348,7 @@ class TecnicaCreateMenuView(ui.View):
             embed.set_footer(text=status)
         return embed
 
-    @ui.button(label="Abrir formulário", style=discord.ButtonStyle.secondary)
+    @ui.button(label="Abrir formulário", style=discord.ButtonStyle.secondary, row=1)
     async def criar(self, interaction, button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
@@ -349,6 +356,12 @@ class TecnicaCreateMenuView(ui.View):
             return await interaction.response.send_message("❌ Apenas administradores registram técnicas oficiais.", ephemeral=True)
         criador_id = None if self.classificacao == "oficial" else self.user_id
         await interaction.response.send_modal(TecnicaCreateModal(self.classificacao, criador_id))
+
+    @ui.button(label="Voltar ao Status", style=discord.ButtonStyle.secondary, row=1)
+    async def voltar_status(self, interaction, button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
+        await edit_tecnica_status_message(interaction, self.user_id, self.from_profile, self.profile_layout)
 
 
 class TecnicaSelect(ui.Select):
@@ -576,6 +589,23 @@ class TecnicaMenuView(ui.View):
         view = TecnicaUseMenuView(self.user_id, role_ids, self.from_profile, self.profile_layout)
         await interaction.response.edit_message(
             embed=build_tecnica_use_menu_embed(view),
+            attachments=[],
+            view=view,
+        )
+
+    @ui.button(label="Criar Técnica", style=discord.ButtonStyle.secondary, row=1)
+    async def criar_tecnica(self, interaction, button):
+        if not await self._guard(interaction):
+            return
+        view = TecnicaCreateMenuView(
+            self.user_id,
+            interaction.user.guild_permissions.administrator,
+            self.from_profile,
+            self.profile_layout,
+            show_back=True,
+        )
+        await interaction.response.edit_message(
+            embed=view.build_embed(),
             attachments=[],
             view=view,
         )

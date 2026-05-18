@@ -6,7 +6,7 @@ from database import get_connection
 from utils.ui_components import PaginatorView
 from cogs.potencial_system import ModalConsumoPotencial, PotencialAttrScopeView
 from utils.race_restrictions import normalize_race_restriction
-from utils.logic import atribuir_vaga_logica, remover_vaga_logica
+from utils.logic import atribuir_vaga_logica, excluir_vaga_criada_logica, remover_vaga_logica
 from utils.tecnica_service import configure_tecnica_buff, list_tecnicas
 
 
@@ -103,6 +103,43 @@ def get_vaga_categories():
         ).fetchall()]
 
 
+def get_created_vaga_categories():
+    with get_connection() as conn:
+        return [row[0] for row in conn.execute(
+            '''
+            SELECT DISTINCT categoria
+            FROM vagas
+            WHERE COALESCE(criada, 0) = 1
+              AND categoria IS NOT NULL
+              AND categoria != ''
+            ORDER BY categoria COLLATE NOCASE
+            '''
+        ).fetchall()]
+
+
+def get_created_vagas_by_category(categoria):
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            '''
+            SELECT v.nome, v.categoria, v.vaga_id, v.limite, v.role_id,
+                   (SELECT COUNT(*)
+                    FROM player_vagas pv
+                    WHERE pv.vaga_nome = v.nome
+                      AND COALESCE(pv.extra, 0) = 0) AS ocupantes,
+                   (SELECT COUNT(*)
+                    FROM vagas_vinculo vv
+                    WHERE vv.vaga_pai = v.nome OR vv.vaga_filha = v.nome) AS vinculos
+            FROM vagas v
+            WHERE v.categoria = ?
+              AND COALESCE(v.criada, 0) = 1
+            ORDER BY v.nome COLLATE NOCASE
+            ''',
+            (categoria,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_vagas_by_category(categoria):
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
@@ -153,8 +190,8 @@ class ModalCriarVaga(ui.Modal, title='Detalhes da Vaga'):
 
             with get_connection() as conn:
                 conn.execute('''INSERT OR REPLACE INTO vagas 
-                    (nome, categoria, atributo, limite, restricao_raca, role_id, vaga_id, descricao) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (nome, categoria, atributo, limite, restricao_raca, role_id, vaga_id, descricao, criada) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)''',
                     (self.nome.value, self.categoria, self.atributos.value.lower(), lim, raca_res, self.role_id, v_id_val, self.descricao.value or ""))
             await interaction.response.send_message(f"✅ Vaga `{self.nome.value}` criada em `{self.categoria}`!", ephemeral=True)
         except Exception as e:
@@ -957,6 +994,102 @@ class EditarVagaSelectView(ui.View):
             self.add_item(SelectEditarVaga(vagas[start:start + 25], start))
 
 
+class SelectCategoriaExcluirVaga(ui.Select):
+    def __init__(self, categorias):
+        options = [discord.SelectOption(label=categoria, value=categoria) for categoria in categorias[:25]]
+        super().__init__(placeholder="Escolha a categoria da vaga criada...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem excluir vagas.", ephemeral=True)
+
+        vagas = get_created_vagas_by_category(self.values[0])
+        if not vagas:
+            return await interaction.response.send_message("❌ Nenhuma vaga criada nesta categoria.", ephemeral=True)
+
+        await interaction.response.send_message(
+            "Selecione a vaga criada que deseja excluir:",
+            view=ExcluirVagaSelectView(vagas),
+            ephemeral=True,
+        )
+
+
+class SelectExcluirVaga(ui.Select):
+    def __init__(self, vagas, start_index=0):
+        self.vagas = {str(start_index + index): vaga for index, vaga in enumerate(vagas)}
+        options = []
+        for index, vaga in enumerate(vagas, start=start_index):
+            vid = vaga["vaga_id"] or "Sem ID"
+            ocupantes = int(vaga.get("ocupantes") or 0)
+            vinculos = int(vaga.get("vinculos") or 0)
+            options.append(discord.SelectOption(
+                label=f"{vid} - {vaga['nome']}"[:100],
+                value=str(index),
+                description=f"Ocupantes: {ocupantes} | Vínculos: {vinculos}"[:100],
+            ))
+        super().__init__(placeholder=f"Vagas criadas {start_index + 1}-{start_index + len(vagas)}", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem excluir vagas.", ephemeral=True)
+
+        vaga = self.vagas[self.values[0]]
+        embed = discord.Embed(title="🗑️ Excluir Vaga", color=0xe74c3c)
+        embed.description = (
+            f"Confirme a exclusão de **{vaga['nome']}**.\n\n"
+            "Essa ação remove a vaga do sistema, seus vínculos, registros dos jogadores e pontos/cargos associados."
+        )
+        embed.add_field(name="ID", value=f"`{vaga['vaga_id'] or 'Sem ID'}`", inline=True)
+        embed.add_field(name="Categoria", value=f"`{vaga['categoria']}`", inline=True)
+        embed.add_field(name="Ocupantes", value=f"`{int(vaga.get('ocupantes') or 0)}`", inline=True)
+        embed.add_field(name="Vínculos", value=f"`{int(vaga.get('vinculos') or 0)}`", inline=True)
+        await interaction.response.send_message(embed=embed, view=ConfirmExcluirVagaView(vaga), ephemeral=True)
+
+
+class ExcluirVagaSelectView(ui.View):
+    def __init__(self, vagas):
+        super().__init__(timeout=120)
+        for start in range(0, min(len(vagas), 125), 25):
+            self.add_item(SelectExcluirVaga(vagas[start:start + 25], start))
+
+
+class ConfirmExcluirVagaView(ui.View):
+    def __init__(self, vaga):
+        super().__init__(timeout=120)
+        self.vaga = vaga
+
+    def _disable(self):
+        for child in self.children:
+            child.disabled = True
+
+    @ui.button(label="Confirmar Exclusão", style=discord.ButtonStyle.danger)
+    async def confirmar(self, interaction: discord.Interaction, button: ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem excluir vagas.", ephemeral=True)
+
+        ok, msg, details = await excluir_vaga_criada_logica(interaction.guild, self.vaga["nome"])
+        self._disable()
+        if not ok:
+            return await interaction.response.edit_message(content=msg, embed=None, view=self)
+
+        lines = [
+            msg,
+            f"Usuários afetados: `{details['usuarios']}`",
+        ]
+        removed_text = format_removed_vagas(details.get("removidas") or [])
+        if removed_text != "Nenhuma vaga removida.":
+            lines.append("\nRemoções registradas:")
+            lines.append(removed_text[:1500])
+        await interaction.response.edit_message(content="\n".join(lines), embed=None, view=self)
+
+    @ui.button(label="Cancelar", style=discord.ButtonStyle.secondary)
+    async def cancelar(self, interaction: discord.Interaction, button: ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem excluir vagas.", ephemeral=True)
+        self._disable()
+        await interaction.response.edit_message(content="Exclusão cancelada.", embed=None, view=self)
+
+
 class VagasView(ui.View):
     def __init__(self, is_admin=False):
         super().__init__(timeout=None)
@@ -967,6 +1100,9 @@ class VagasView(ui.View):
             btn_edit = ui.Button(label="✏️ Editar Vaga", style=discord.ButtonStyle.primary, custom_id="admin_editar_vaga")
             btn_edit.callback = self.admin_editar_vaga_callback
             self.add_item(btn_edit)
+            btn_delete = ui.Button(label="Excluir Vaga", style=discord.ButtonStyle.danger, custom_id="admin_excluir_vaga")
+            btn_delete.callback = self.admin_excluir_vaga_callback
+            self.add_item(btn_delete)
 
     async def admin_criar_vaga_callback(self, interaction):
         if not interaction.user.guild_permissions.administrator:
@@ -989,6 +1125,22 @@ class VagasView(ui.View):
         view = ui.View(timeout=120)
         view.add_item(SelectCategoriaEditarVaga(categorias))
         await interaction.response.send_message("Selecione a categoria da vaga que deseja editar:", view=view, ephemeral=True)
+
+    async def admin_excluir_vaga_callback(self, interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Apenas administradores podem excluir vagas.", ephemeral=True)
+
+        categorias = get_created_vaga_categories()
+        if not categorias:
+            return await interaction.response.send_message("❌ Nenhuma vaga criada foi encontrada para excluir.", ephemeral=True)
+
+        view = ui.View(timeout=120)
+        view.add_item(SelectCategoriaExcluirVaga(categorias))
+        await interaction.response.send_message(
+            "Selecione a categoria da vaga criada que deseja excluir:",
+            view=view,
+            ephemeral=True,
+        )
 
     async def listar_por_cat(self, interaction, cat):
         with get_connection() as conn:

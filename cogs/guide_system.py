@@ -113,7 +113,7 @@ class AdminGuideView(ui.View):
         embed = discord.Embed(title="🎭 Gestão de Vagas", color=0xf1c40f)
         embed.description = (
             "Vagas são bônus que dão cargos e multiplicadores.\n\n"
-            "• Use `.vagas` para listar vagas e, como admin, criar novas vagas pelo botão.\n"
+            "• Use `.vagas` para listar vagas e, como admin, criar, editar ou excluir vagas criadas pelos botões.\n"
             "• Use `.info ID` para consultar uma vaga.\n"
             "• Use `.buffar` para configurar bônus matemáticos.\n"
             "• Use `.setar_ponto`, `.vincular_vaga`, `.dar_vaga` e `.remover_vaga` para pontos, vínculos e atribuições."
@@ -179,16 +179,16 @@ class GuideSystem(commands.Cog):
                 "passar_turno": "Avança seu turno e reduz cooldowns/durações de Kidō, técnicas e potenciais."
             },
             "Kidō": {
-                "kido": "Abre sua biblioteca de Kidō para Shinigami e Vaizard, com botão de usar no próprio menu.",
-                "kido_criar": "Cria Kidō próprios como Comum, Exclusivo ou Proibido; administradores também registram Kidō do sistema.",
+                "kido": "Abre sua biblioteca de Kidō para Shinigami e Vaizard, com botões de usar e Criar Kido no próprio menu.",
+                "kido_criar": "Atalho direto para o menu Criar Kido; também acessível pelo botão em `.kido`.",
                 "info_kido": "Mostra detalhes de Kidō oficiais, exclusivos e proibidos.",
                 "listar_kido": "Abre a listagem de Kidō oficiais, criados, exclusivos e proibidos.",
                 "kido simular": "Calcula gasto, poder e cooldown sem consumir Reiryoku.",
                 "kido_simular": "Atalho para simulação de Kidō por número."
             },
             "Técnicas": {
-                "tecnica": "Abre o menu de técnicas oficiais e criadas, com botão de usar no próprio menu.",
-                "tecnica_criar": "Cria uma técnica sem buff; a staff configura os bônus em `.buffar`.",
+                "tecnica": "Abre o menu de técnicas oficiais e criadas, com botões de usar e Criar Técnica no próprio menu.",
+                "tecnica_criar": "Atalho direto para o menu Criar Técnica; também acessível pelo botão em `.tecnica`.",
                 "listar_tecnicas": "Lista técnicas oficiais e criadas."
             },
             "Vagas": {
@@ -239,15 +239,15 @@ class GuideSystem(commands.Cog):
                 "dar_slot_potencial": "Aumenta o limite de transformações."
             },
             "Criação de Conteúdo": {
-                "vagas": "Menu interativo para listar vagas e criar vagas/cargos via botão admin.",
+                "vagas": "Menu interativo para listar vagas e criar, editar ou excluir vagas criadas via botão admin.",
                 "buffar": "Configura buffs por categoria de vaga, buffs de técnica, consumo e multiplicadores de potencial.",
                 "setar_ponto": "Configura PA/PP bônus de vagas e PA/PP iniciais das raças.",
                 "vincular_vaga": "Abre o menu para configurar vínculos de vaga mãe e vaga filha, com opção de filha extra.",
                 "inicial config": "Gerencia as raças iniciais do menu .criar.",
                 "config_pericia": "Painel administrativo para adicionar/listar perícias.",
                 "potencial": "Menu de potenciais; administradores recebem botões de criar/editar.",
-                "kido": "Menu de Kidō; `.kido_criar` permite classificar criações e registros oficiais.",
-                "tecnica": "Menu de técnicas; `.tecnica_criar` registra criações e técnicas oficiais."
+                "kido": "Menu de Kidō com botão Criar Kido para classificar criações e registros oficiais.",
+                "tecnica": "Menu de técnicas com botão Criar Técnica para registrar criações e técnicas oficiais."
             },
             "Pretensão": {
                 "criar_pretensão": "Define o canal onde a pretensão acontece.",
