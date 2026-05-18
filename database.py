@@ -20,23 +20,23 @@ DEFAULT_PERICIAS = [
     (
         'Zanjutsu',
         'Shinigami, Vaizard',
-        'Arte de combate com Zanpakutō, unindo técnica, postura e conexão com a lâmina. +2% de força por nível.',
+        'Arte de combate com Zanpakutō, unindo técnica, postura e conexão com a lâmina. +2% em técnicas de Zanjutsu por nível.',
         0.02,
-        'forca',
+        'tecnica:Zanjutsu',
     ),
     (
         'Hakuda',
         'Shinigami, Vaizard',
-        'Combate desarmado de curta distância, focado em golpes físicos, pressão e controle corporal. +2% de força por nível.',
+        'Combate desarmado de curta distância, focado em golpes físicos, pressão e controle corporal. +2% em técnicas de Hakuda por nível.',
         0.02,
-        'forca',
+        'tecnica:Hakuda',
     ),
     (
         'Hohō',
         'Shinigami, Vaizard',
-        'Movimentação avançada dos Shinigamis, base do Shunpo e de técnicas evasivas. +2% de velocidade por nível.',
+        'Movimentação avançada dos Shinigamis, base do Shunpo e de técnicas evasivas. +2% em técnicas de Hohō por nível.',
         0.02,
-        'velocidade',
+        'tecnica:Hohō',
     ),
     (
         'Kidō',
@@ -48,9 +48,9 @@ DEFAULT_PERICIAS = [
     (
         'Kaidō',
         'Shinigami, Vaizard',
-        'Kidō de cura e restauração espiritual, refinando tratamento de ferimentos e recuperação de energia. +2% em técnicas de Kaidō por nível.',
-        0.02,
-        'tecnica:Kaidō',
+        'Kidō de cura e restauração espiritual, refinando tratamento de ferimentos e recuperação de energia.',
+        None,
+        None,
     ),
     (
         'Lucha',
@@ -69,9 +69,9 @@ DEFAULT_PERICIAS = [
     (
         'Regen',
         'Hollow, Arrancar, Vaizard',
-        'Regeneração Hollow para recuperar danos e manter o corpo em combate. +2% em técnicas de regeneração por nível.',
-        0.02,
-        'tecnica:Regen',
+        'Regeneração Hollow para recuperar danos e manter o corpo em combate.',
+        None,
+        None,
     ),
     (
         'Cero',
@@ -226,7 +226,6 @@ DEFAULT_TECNICAS = [
     ('Sonído', 'Sonido', 'Hollow, Arrancar, Vaizard', 'Sonido', 'Movimento de alta velocidade usado por Arrancar.', 1),
     ('Gemelos Sonído', 'Sonido', 'Hollow, Arrancar, Vaizard', 'Sonido', 'Variação avançada que cria duplicatas por movimento.', 1),
     ('Hierro', 'Hierro', 'Hollow, Arrancar, Vaizard', 'Hierro', 'Endurecimento espiritual da pele para resistir a dano.', 1),
-    ('High-Speed Regeneration', 'Regen', 'Hollow, Arrancar, Vaizard', 'Regen', 'Regeneração acelerada de ferimentos e membros perdidos.', 1),
     ('Máscara', 'Máscara', 'Vaizard, Vizard, Visored', 'Máscara', 'Uso da máscara Hollow para liberar poder híbrido por turnos.', 1),
 
     # Quincy
@@ -268,6 +267,11 @@ DEFAULT_TECNICAS = [
     ('Digital Radial Invaders', 'Object Affinity', 'Fullbringer', 'Object Affinity', 'Ataque digital radial associado ao Fullbring de Yukio.', 1),
     ('Addiction Shot', 'Object Affinity', 'Fullbringer', 'Object Affinity', 'Técnica de disparo associada a uma habilidade Fullbring.', 1),
 ]
+
+
+REMOVED_DEFAULT_TECNICAS = (
+    ('High-Speed Regeneration', 'Regen'),
+)
 
 
 BLOCKED_TECNICA_VARIANT_NAMES = (
@@ -365,6 +369,36 @@ def _upsert_default_pericias(cursor):
 
 
 def _upsert_default_tecnicas(cursor):
+    removed_ids = []
+    for nome, categoria in REMOVED_DEFAULT_TECNICAS:
+        removed_ids.extend(
+            row[0]
+            for row in cursor.execute(
+                """
+                SELECT id
+                FROM tecnicas
+                WHERE classificacao = 'oficial'
+                  AND LOWER(nome) = LOWER(?)
+                  AND LOWER(categoria) = LOWER(?)
+                """,
+                (nome, categoria),
+            ).fetchall()
+        )
+    if removed_ids:
+        placeholders = ",".join("?" for _ in removed_ids)
+        cursor.execute(
+            f"DELETE FROM tecnica_role_unlocks WHERE tecnica_id IN ({placeholders})",
+            tuple(removed_ids),
+        )
+        cursor.execute(
+            f"DELETE FROM tecnica_user_unlocks WHERE tecnica_id IN ({placeholders})",
+            tuple(removed_ids),
+        )
+        cursor.execute(
+            f"DELETE FROM tecnicas WHERE id IN ({placeholders})",
+            tuple(removed_ids),
+        )
+
     existing = {
         (_pericia_key(nome), _pericia_key(categoria)): tecnica_id
         for tecnica_id, nome, categoria in cursor.execute(
