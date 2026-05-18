@@ -366,6 +366,7 @@ def delete_player_data(conn, user_id, include_character=True):
 
     user_tables = [
         'player_vagas',
+        'player_vaga_pontos',
         'player_pericias',
         'player_potencial',
         'kido_estado',

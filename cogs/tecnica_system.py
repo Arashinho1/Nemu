@@ -250,6 +250,35 @@ def build_use_embed(data):
     return embed
 
 
+def build_tecnica_use_menu_embed(view):
+    embed = discord.Embed(
+        title="⚔️ Usar Técnica",
+        description="Escolha uma classificação disponível para aplicar uma técnica.",
+        color=0x2ecc71,
+    )
+    if not view.has_categories:
+        embed.description = "Você ainda não possui técnicas disponíveis para usar."
+    return embed
+
+
+async def edit_tecnica_status_message(interaction, user_id, from_profile=False, profile_layout="desktop"):
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+    member = _resolve_member(interaction.client, interaction.guild, user_id)
+    file, embed = await build_tecnica_image_embed(user_id, member)
+    view = TecnicaMenuView(user_id, from_profile, profile_layout)
+    if not file:
+        embed = build_status_embed(user_id)
+        if not embed:
+            return await interaction.edit_original_response(
+                content="❌ Você não possui um personagem.",
+                attachments=[],
+                view=None,
+            )
+        return await interaction.edit_original_response(content=None, embed=embed, attachments=[], view=view)
+    await interaction.edit_original_response(content=None, embed=embed, attachments=[file], view=view)
+
+
 class TecnicaCreateModal(ui.Modal):
     def __init__(self, classificacao, criador_id=None):
         super().__init__(title=CREATE_TYPE_LABELS.get(classificacao, "Criar Técnica"))
@@ -347,15 +376,31 @@ class TecnicaSelect(ui.Select):
         await interaction.response.edit_message(embed=self.parent_menu.build_embed("Técnica selecionada."), view=self.parent_menu)
 
 
+class TecnicaStatusReturnView(ui.View):
+    def __init__(self, user_id, from_profile=False, profile_layout="desktop"):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.from_profile = from_profile
+        self.profile_layout = profile_layout
+
+    @ui.button(label="Voltar ao Status", style=discord.ButtonStyle.secondary)
+    async def voltar_status(self, interaction, button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
+        await edit_tecnica_status_message(interaction, self.user_id, self.from_profile, self.profile_layout)
+
+
 class TecnicaUseListView(ui.View):
     PAGE_SIZE = 25
 
-    def __init__(self, user_id, classificacao, tecnicas, role_ids=None):
+    def __init__(self, user_id, classificacao, tecnicas, role_ids=None, from_profile=False, profile_layout="desktop"):
         super().__init__(timeout=180)
         self.user_id = user_id
         self.classificacao = classificacao
         self.tecnicas = tecnicas
         self.role_ids = role_ids or []
+        self.from_profile = from_profile
+        self.profile_layout = profile_layout
         self.page = 0
         self.selected_id = None
         self.refresh_items()
@@ -398,6 +443,10 @@ class TecnicaUseListView(ui.View):
             self.add_item(prev_page)
             self.add_item(next_page)
 
+        voltar_status = ui.Button(label="Voltar ao Status", style=discord.ButtonStyle.secondary, row=3)
+        voltar_status.callback = self.voltar_status
+        self.add_item(voltar_status)
+
     async def _guard(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
@@ -413,7 +462,15 @@ class TecnicaUseListView(ui.View):
         ok, msg, data = use_tecnica(self.user_id, self.selected_id, role_ids)
         if not ok:
             return await interaction.response.edit_message(embed=self.build_embed(f"❌ {msg}"), view=self)
-        await interaction.response.edit_message(embed=build_use_embed(data), view=None)
+        await interaction.response.edit_message(
+            embed=build_use_embed(data),
+            view=TecnicaStatusReturnView(self.user_id, self.from_profile, self.profile_layout),
+        )
+
+    async def voltar_status(self, interaction):
+        if not await self._guard(interaction):
+            return
+        await edit_tecnica_status_message(interaction, self.user_id, self.from_profile, self.profile_layout)
 
     async def prev_page(self, interaction):
         if not await self._guard(interaction):
@@ -433,20 +490,25 @@ class TecnicaUseListView(ui.View):
 
 
 class TecnicaUseMenuView(ui.View):
-    def __init__(self, user_id, role_ids=None):
+    def __init__(self, user_id, role_ids=None, from_profile=False, profile_layout="desktop"):
         super().__init__(timeout=180)
         self.user_id = user_id
         self.role_ids = role_ids or []
+        self.from_profile = from_profile
+        self.profile_layout = profile_layout
         self.known_by_class = {
             classificacao: list_available_tecnicas(user_id, classificacao, self.role_ids)
             for classificacao in ("oficial", "criado")
         }
         self._add_class_button("oficial")
         self._add_class_button("criado")
+        voltar_status = ui.Button(label="Voltar ao Status", style=discord.ButtonStyle.secondary, row=1)
+        voltar_status.callback = self.voltar_status
+        self.add_item(voltar_status)
 
     @property
     def has_categories(self):
-        return bool(self.children)
+        return any(self.known_by_class.values())
 
     def _add_class_button(self, classificacao):
         if not self.known_by_class.get(classificacao):
@@ -466,9 +528,21 @@ class TecnicaUseMenuView(ui.View):
                     embed=discord.Embed(title="⚔️ Usar Técnica", description="❌ Nenhuma técnica disponível.", color=0x2ecc71),
                     view=self,
                 )
-            view = TecnicaUseListView(self.user_id, classificacao, tecnicas, role_ids)
+            view = TecnicaUseListView(
+                self.user_id,
+                classificacao,
+                tecnicas,
+                role_ids,
+                self.from_profile,
+                self.profile_layout,
+            )
             await interaction.response.edit_message(embed=view.build_embed(), view=view)
         return callback
+
+    async def voltar_status(self, interaction):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
+        await edit_tecnica_status_message(interaction, self.user_id, self.from_profile, self.profile_layout)
 
 
 class TecnicaMenuView(ui.View):
@@ -492,13 +566,19 @@ class TecnicaMenuView(ui.View):
     async def status(self, interaction, button):
         if not await self._guard(interaction):
             return
-        await interaction.response.defer()
-        member = _resolve_member(interaction.client, interaction.guild, self.user_id)
-        file, embed = await build_tecnica_image_embed(self.user_id, member)
-        if not file:
-            embed = build_status_embed(self.user_id)
-            return await interaction.edit_original_response(embed=embed, attachments=[], view=self)
-        await interaction.edit_original_response(embed=embed, attachments=[file], view=self)
+        await edit_tecnica_status_message(interaction, self.user_id, self.from_profile, self.profile_layout)
+
+    @ui.button(label="Usar", style=discord.ButtonStyle.success, row=1)
+    async def usar_tecnica(self, interaction, button):
+        if not await self._guard(interaction):
+            return
+        role_ids = _member_role_ids(interaction.user)
+        view = TecnicaUseMenuView(self.user_id, role_ids, self.from_profile, self.profile_layout)
+        await interaction.response.edit_message(
+            embed=build_tecnica_use_menu_embed(view),
+            attachments=[],
+            view=view,
+        )
 
     @ui.button(label="Técnicas Oficiais", style=discord.ButtonStyle.secondary, row=0)
     async def oficiais(self, interaction, button):
@@ -647,21 +727,6 @@ class TecnicaSystem(commands.Cog):
             return await ctx.send("❌ Você não possui um personagem.")
         await ctx.send(file=file, embed=embed, view=TecnicaMenuView(ctx.author.id))
 
-    @commands.command(name="tecnica_usar", aliases=["técnica_usar", "tecnicas_usar", "técnicas_usar"])
-    async def tecnica_usar(self, ctx):
-        if not ensure_tecnica_state(ctx.author.id):
-            return await ctx.send("❌ Você não possui um personagem.")
-        view = TecnicaUseMenuView(ctx.author.id, _member_role_ids(ctx.author))
-        embed = discord.Embed(
-            title="⚔️ Usar Técnica",
-            description="Escolha uma classificação disponível para aplicar uma técnica.",
-            color=0x2ecc71,
-        )
-        if not view.has_categories:
-            embed.description = "Você ainda não possui técnicas disponíveis para usar."
-            return await ctx.send(embed=embed)
-        await ctx.send(embed=embed, view=view)
-
     @commands.command(name="tecnica_criar", aliases=["técnica_criar", "tecnicas_criar", "técnicas_criar"])
     async def tecnica_criar(self, ctx):
         if not ensure_tecnica_state(ctx.author.id):
@@ -677,10 +742,6 @@ class TecnicaSystem(commands.Cog):
             color=0x2ecc71,
         )
         await ctx.send(embed=embed, view=TecnicaListView())
-
-    @tecnica.command(name="usar")
-    async def usar(self, ctx):
-        await self.tecnica_usar(ctx)
 
     @tecnica.command(name="criar")
     async def criar(self, ctx):

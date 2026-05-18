@@ -90,7 +90,7 @@ class PlayerGuideView(ui.View):
     async def commands_list(self, interaction, button):
         embed = discord.Embed(title="📜 Comandos Úteis", color=0x2ecc71)
         embed.add_field(name="Informação", value="`.perfil`, `.pericia`, `.kido`, `.tecnica`, `.vagas`, `.info ID`, `.buffs`, `.comandos`", inline=False)
-        embed.add_field(name="Ação", value="`.criar`, `.deletar`, `.potencial`, `.p Shikai`, `.kido usar`, `.tecnica usar`, `.passar_turno`, `.pretensão`", inline=False)
+        embed.add_field(name="Ação", value="`.criar`, `.deletar`, `.potencial`, `.p Shikai`, `.passar_turno`, `.pretensão`", inline=False)
         await interaction.response.edit_message(embed=embed)
 
 class AdminGuideView(ui.View):
@@ -115,7 +115,8 @@ class AdminGuideView(ui.View):
             "Vagas são bônus que dão cargos e multiplicadores.\n\n"
             "• Use `.vagas` para listar vagas e, como admin, criar novas vagas pelo botão.\n"
             "• Use `.info ID` para consultar uma vaga.\n"
-            "• Use `.buffar` para configurar bônus matemáticos."
+            "• Use `.buffar` para configurar bônus matemáticos.\n"
+            "• Use `.setar_ponto`, `.vincular_vaga`, `.dar_vaga` e `.remover_vaga` para pontos, vínculos e atribuições."
         )
         await interaction.response.edit_message(embed=embed)
 
@@ -178,8 +179,7 @@ class GuideSystem(commands.Cog):
                 "passar_turno": "Avança seu turno e reduz cooldowns/durações de Kidō, técnicas e potenciais."
             },
             "Kidō": {
-                "kido": "Abre sua biblioteca de Kidō para Shinigami e Vaizard, com status e listas conhecidas.",
-                "kido_usar": "Conjura Kidō com Encantamento, Sem Encantamento ou Nijū Eishō no Tier III.",
+                "kido": "Abre sua biblioteca de Kidō para Shinigami e Vaizard, com botão de usar no próprio menu.",
                 "kido_criar": "Cria Kidō próprios como Comum, Exclusivo ou Proibido; administradores também registram Kidō do sistema.",
                 "info_kido": "Mostra detalhes de Kidō oficiais, exclusivos e proibidos.",
                 "listar_kido": "Abre a listagem de Kidō oficiais, criados, exclusivos e proibidos.",
@@ -187,8 +187,7 @@ class GuideSystem(commands.Cog):
                 "kido_simular": "Atalho para simulação de Kidō por número."
             },
             "Técnicas": {
-                "tecnica": "Abre o menu de técnicas oficiais e criadas.",
-                "tecnica_usar": "Usa uma técnica disponível para aplicar buff físico temporário.",
+                "tecnica": "Abre o menu de técnicas oficiais e criadas, com botão de usar no próprio menu.",
                 "tecnica_criar": "Cria uma técnica sem buff; a staff configura os bônus em `.buffar`.",
                 "listar_tecnicas": "Lista técnicas oficiais e criadas."
             },
@@ -221,6 +220,9 @@ class GuideSystem(commands.Cog):
             },
             "Atribuição (Setar)": {
                 "setar_potencial": "Atribui uma liberação (Shikai/Bankai) a um jogador.",
+                "dar_vaga": "Atribui uma vaga a um jogador pelo ID ou nome. Uso: `.dar_vaga @membro ID`.",
+                "setar_vaga": "Alias de `.dar_vaga`.",
+                "remover_vaga": "Remove uma vaga do jogador e revoga cargos, bônus e pontos registrados.",
                 "ajustar_potencial": "Ajusta multiplicador, duração ou cooldown individual. Uso: `.ajustar_potencial @membro \"Shikai\" mult 3.0`.",
                 "config_potencial_attr": "Define multiplicador global por atributo. Também disponível no menu `.buffar` ou `.potencial`.",
                 "ajustar_potencial_attr": "Sobrescreve multiplicador por atributo de um jogador. Também disponível no menu `.buffar` ou `.potencial`.",
@@ -239,6 +241,8 @@ class GuideSystem(commands.Cog):
             "Criação de Conteúdo": {
                 "vagas": "Menu interativo para listar vagas e criar vagas/cargos via botão admin.",
                 "buffar": "Configura buffs por categoria de vaga, buffs de técnica, consumo e multiplicadores de potencial.",
+                "setar_ponto": "Configura PA/PP bônus de vagas e PA/PP iniciais das raças.",
+                "vincular_vaga": "Abre o menu para configurar vínculos de vaga mãe e vaga filha, com opção de filha extra.",
                 "inicial config": "Gerencia as raças iniciais do menu .criar.",
                 "config_pericia": "Painel administrativo para adicionar/listar perícias.",
                 "potencial": "Menu de potenciais; administradores recebem botões de criar/editar.",

@@ -274,7 +274,7 @@ async def apagar_servidor(ctx):
         async def actual_delete(self, interaction):
             with database.get_connection() as conn:
                 tables = ['config_logs', 'config_historico', 'config_comandos', 'config_pretensao', 'personagens', 'potenciais', 
-                          'player_potencial', 'vagas', 'player_vagas', 'vagas_vinculo', 'pericias_base', 
+                          'player_potencial', 'vagas', 'player_vagas', 'player_vaga_pontos', 'vagas_vinculo', 'pericias_base',
                           'player_pericias', 'kido_estado', 'kido_usos', 'kido_tecnicas',
                           'tecnica_estado', 'tecnica_usos', 'tecnicas', 'attribute_modifiers']
                 for t in tables:
@@ -316,7 +316,7 @@ async def resetar_servidor(ctx):
 
         async def actual_reset(self, interaction):
             with database.get_connection() as conn:
-                tables = ['personagens', 'player_potencial', 'player_vagas', 'player_pericias',
+                tables = ['personagens', 'player_potencial', 'player_vagas', 'player_vaga_pontos', 'player_pericias',
                           'kido_estado', 'kido_usos', 'tecnica_estado', 'tecnica_usos',
                           'attribute_modifiers']
                 for t in tables:

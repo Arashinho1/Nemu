@@ -427,6 +427,8 @@ def _upsert_default_vagas(cursor):
             )
             if current_nome != nome:
                 cursor.execute('UPDATE player_vagas SET vaga_nome = ? WHERE vaga_nome = ?', (nome, current_nome))
+                cursor.execute('UPDATE player_vagas SET origem_vaga = ? WHERE origem_vaga = ?', (nome, current_nome))
+                cursor.execute('UPDATE player_vaga_pontos SET vaga_nome = ? WHERE vaga_nome = ?', (nome, current_nome))
                 cursor.execute('UPDATE vagas_vinculo SET vaga_pai = ? WHERE vaga_pai = ?', (nome, current_nome))
                 cursor.execute('UPDATE vagas_vinculo SET vaga_filha = ? WHERE vaga_filha = ?', (nome, current_nome))
             existing_by_name[key] = nome
@@ -475,9 +477,20 @@ def setup_db():
         cursor.execute('''CREATE TABLE IF NOT EXISTS vagas (
             nome TEXT PRIMARY KEY, categoria TEXT, multiplicador REAL DEFAULT 0, bonus_fixo INTEGER DEFAULT 0,
             role_id INTEGER, atributo TEXT DEFAULT 'todos', limite INTEGER DEFAULT 0,
-            restricao_raca TEXT, vaga_id TEXT UNIQUE, descricao TEXT, bloqueada INTEGER DEFAULT 0)''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS player_vagas (user_id INTEGER, vaga_nome TEXT, FOREIGN KEY(vaga_nome) REFERENCES vagas(nome))''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS vagas_vinculo (vaga_pai TEXT, vaga_filha TEXT, FOREIGN KEY(vaga_pai) REFERENCES vagas(nome), FOREIGN KEY(vaga_filha) REFERENCES vagas(nome), PRIMARY KEY (vaga_pai, vaga_filha))''')
+            restricao_raca TEXT, vaga_id TEXT UNIQUE, descricao TEXT, bloqueada INTEGER DEFAULT 0,
+            pontos_pa_bonus INTEGER DEFAULT 0, pontos_pp_bonus INTEGER DEFAULT 0,
+            pontos_pa_inicial INTEGER DEFAULT 0, pontos_pp_inicial INTEGER DEFAULT 0)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS player_vagas (
+            user_id INTEGER, vaga_nome TEXT, extra INTEGER DEFAULT 0, origem_vaga TEXT,
+            FOREIGN KEY(vaga_nome) REFERENCES vagas(nome))''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS player_vaga_pontos (
+            user_id INTEGER, vaga_nome TEXT, pontos_pa INTEGER DEFAULT 0, pontos_pp INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, vaga_nome), FOREIGN KEY(vaga_nome) REFERENCES vagas(nome))''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS vagas_vinculo (
+            vaga_pai TEXT, vaga_filha TEXT, extra INTEGER DEFAULT 0,
+            FOREIGN KEY(vaga_pai) REFERENCES vagas(nome),
+            FOREIGN KEY(vaga_filha) REFERENCES vagas(nome),
+            PRIMARY KEY (vaga_pai, vaga_filha))''')
         
         # Tabelas do Sistema de Perícias
         cursor.execute('''CREATE TABLE IF NOT EXISTS pericias_base (
@@ -566,6 +579,13 @@ def setup_db():
             ('kido_usos', 'tecnica_id', 'INTEGER'),
             ('kido_estado', 'ultimo_poder', 'INTEGER DEFAULT 0'),
             ('vagas', 'bloqueada', 'INTEGER DEFAULT 0'),
+            ('vagas', 'pontos_pa_bonus', 'INTEGER DEFAULT 0'),
+            ('vagas', 'pontos_pp_bonus', 'INTEGER DEFAULT 0'),
+            ('vagas', 'pontos_pa_inicial', 'INTEGER DEFAULT 0'),
+            ('vagas', 'pontos_pp_inicial', 'INTEGER DEFAULT 0'),
+            ('player_vagas', 'extra', 'INTEGER DEFAULT 0'),
+            ('player_vagas', 'origem_vaga', 'TEXT'),
+            ('vagas_vinculo', 'extra', 'INTEGER DEFAULT 0'),
             ('config_pretensao', 'anunciado', 'INTEGER DEFAULT 0'),
             ('config_pretensao', 'fechado_manual', 'INTEGER DEFAULT 0'),
             ('kido_tecnicas', 'criador_id', 'INTEGER'),
@@ -775,6 +795,66 @@ def setup_db():
                     WHEN 13 THEN 3
                     WHEN 14 THEN 3
                     ELSE limite_nivel
+                END
+            ''')
+            cursor.execute('INSERT INTO schema_migrations (id) VALUES (?)', (migration_id,))
+
+        migration_id = 'reiatsu_base_20260518'
+        if not cursor.execute('SELECT 1 FROM schema_migrations WHERE id = ?', (migration_id,)).fetchone():
+            # Ajusta indices persistidos para a nova base de 15 faixas.
+            cursor.execute('''
+                UPDATE personagens
+                SET limite_nivel = CASE limite_nivel
+                    WHEN 0 THEN 0
+                    WHEN 1 THEN 1
+                    WHEN 2 THEN 2
+                    WHEN 3 THEN 3
+                    WHEN 4 THEN 4
+                    WHEN 5 THEN 5
+                    WHEN 6 THEN 6
+                    WHEN 7 THEN 7
+                    WHEN 8 THEN 8
+                    WHEN 9 THEN 9
+                    WHEN 10 THEN 10
+                    WHEN 11 THEN 11
+                    WHEN 12 THEN 11
+                    WHEN 13 THEN 12
+                    WHEN 14 THEN 13
+                    WHEN 15 THEN 13
+                    WHEN 16 THEN 14
+                    WHEN 17 THEN 13
+                    WHEN 18 THEN 14
+                    ELSE limite_nivel
+                END
+            ''')
+            cursor.execute('INSERT INTO schema_migrations (id) VALUES (?)', (migration_id,))
+
+        migration_id = 'reiatsu_base_compact_20260518'
+        if not cursor.execute('SELECT 1 FROM schema_migrations WHERE id = ?', (migration_id,)).fetchone():
+            # Ajusta indices persistidos para a base compacta de 10 faixas.
+            cursor.execute('''
+                UPDATE personagens
+                SET limite_nivel = CASE limite_nivel
+                    WHEN 0 THEN 0
+                    WHEN 1 THEN 1
+                    WHEN 2 THEN 2
+                    WHEN 3 THEN 2
+                    WHEN 4 THEN 3
+                    WHEN 5 THEN 4
+                    WHEN 6 THEN 5
+                    WHEN 7 THEN 6
+                    WHEN 8 THEN 7
+                    WHEN 9 THEN 8
+                    WHEN 10 THEN 8
+                    WHEN 11 THEN 9
+                    WHEN 12 THEN 9
+                    WHEN 13 THEN 9
+                    WHEN 14 THEN 9
+                    ELSE CASE
+                        WHEN limite_nivel < 0 THEN 0
+                        WHEN limite_nivel > 9 THEN 9
+                        ELSE limite_nivel
+                    END
                 END
             ''')
             cursor.execute('INSERT INTO schema_migrations (id) VALUES (?)', (migration_id,))

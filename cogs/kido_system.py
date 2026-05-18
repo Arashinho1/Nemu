@@ -293,6 +293,35 @@ def build_use_embed(data):
     return embed
 
 
+def build_kido_use_menu_embed(view):
+    embed = discord.Embed(
+        title="🔮 Usar Kidō",
+        description="Escolha uma classificação disponível ou abra Kaidō para ações de cura.",
+        color=0x7f8cff,
+    )
+    if not view.has_categories:
+        embed.description = "Você ainda não possui Kidō disponível para conjurar."
+    return embed
+
+
+async def edit_kido_status_message(interaction, user_id, from_profile=False, profile_layout="desktop"):
+    if not interaction.response.is_done():
+        await interaction.response.defer()
+    member = _resolve_member(interaction.client, interaction.guild, user_id)
+    file, embed = await build_kido_image_embed(user_id, member)
+    view = KidoMenuView(user_id, interaction.client, from_profile, profile_layout)
+    if not file:
+        embed = build_status_embed(user_id)
+        if not embed:
+            return await interaction.edit_original_response(
+                content=KIDO_ACCESS_ERROR,
+                attachments=[],
+                view=None,
+            )
+        return await interaction.edit_original_response(content=None, embed=embed, attachments=[], view=view)
+    await interaction.edit_original_response(content=None, embed=embed, attachments=[file], view=view)
+
+
 class KidoCreateModal(ui.Modal):
     def __init__(self, classificacao, categoria, criador_id=None):
         titles = {
@@ -459,10 +488,26 @@ class KidoCreateMenuView(ui.View):
         await self._open_modal(interaction)
 
 
-class KidoKaidoActionView(ui.View):
-    def __init__(self, user_id):
+class KidoStatusReturnView(ui.View):
+    def __init__(self, user_id, from_profile=False, profile_layout="desktop"):
         super().__init__(timeout=120)
         self.user_id = user_id
+        self.from_profile = from_profile
+        self.profile_layout = profile_layout
+
+    @ui.button(label="Voltar ao Status", style=discord.ButtonStyle.secondary)
+    async def voltar_status(self, interaction, button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
+        await edit_kido_status_message(interaction, self.user_id, self.from_profile, self.profile_layout)
+
+
+class KidoKaidoActionView(ui.View):
+    def __init__(self, user_id, from_profile=False, profile_layout="desktop"):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.from_profile = from_profile
+        self.profile_layout = profile_layout
 
     def build_embed(self, status=None):
         embed = discord.Embed(title="🔮 Kaidō", color=0x7f8cff)
@@ -480,17 +525,28 @@ class KidoKaidoActionView(ui.View):
         ok, msg, data = use_kaido_heal(self.user_id)
         if not ok:
             return await interaction.response.edit_message(embed=self.build_embed(f"❌ {msg}"), view=self)
-        await interaction.response.edit_message(embed=build_use_embed(data), view=None)
+        await interaction.response.edit_message(
+            embed=build_use_embed(data),
+            view=KidoStatusReturnView(self.user_id, self.from_profile, self.profile_layout),
+        )
+
+    @ui.button(label="Voltar ao Status", style=discord.ButtonStyle.secondary, row=1)
+    async def voltar_status(self, interaction, button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
+        await edit_kido_status_message(interaction, self.user_id, self.from_profile, self.profile_layout)
 
 
 class KidoUseListView(ui.View):
     PAGE_SIZE = 25
 
-    def __init__(self, user_id, classificacao, tecnicas):
+    def __init__(self, user_id, classificacao, tecnicas, from_profile=False, profile_layout="desktop"):
         super().__init__(timeout=180)
         self.user_id = user_id
         self.classificacao = classificacao
         self.tecnicas = tecnicas
+        self.from_profile = from_profile
+        self.profile_layout = profile_layout
         self.page = 0
         self.selected_ids = []
         self.allow_niju = calculate_kido(user_id, 1)["tier"] >= 3
@@ -559,6 +615,10 @@ class KidoUseListView(ui.View):
             self.add_item(prev_page)
             self.add_item(next_page)
 
+        voltar_status = ui.Button(label="Voltar ao Status", style=discord.ButtonStyle.secondary, row=3)
+        voltar_status.callback = self.voltar_status
+        self.add_item(voltar_status)
+
     async def _guard(self, interaction):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
@@ -574,7 +634,10 @@ class KidoUseListView(ui.View):
         ok, msg, data = use_kido_tecnica(self.user_id, selected[0]["id"], metodo)
         if not ok:
             return await interaction.response.edit_message(embed=self.build_embed(f"❌ {msg}"), view=self)
-        await interaction.response.edit_message(embed=build_use_embed(data), view=None)
+        await interaction.response.edit_message(
+            embed=build_use_embed(data),
+            view=KidoStatusReturnView(self.user_id, self.from_profile, self.profile_layout),
+        )
 
     async def use_encantamento(self, interaction):
         await self._use_single(interaction, "encantamento")
@@ -591,7 +654,15 @@ class KidoUseListView(ui.View):
         ok, msg, data = use_niju_eisho(self.user_id, [tecnica["id"] for tecnica in selected])
         if not ok:
             return await interaction.response.edit_message(embed=self.build_embed(f"❌ {msg}"), view=self)
-        await interaction.response.edit_message(embed=build_use_embed(data), view=None)
+        await interaction.response.edit_message(
+            embed=build_use_embed(data),
+            view=KidoStatusReturnView(self.user_id, self.from_profile, self.profile_layout),
+        )
+
+    async def voltar_status(self, interaction):
+        if not await self._guard(interaction):
+            return
+        await edit_kido_status_message(interaction, self.user_id, self.from_profile, self.profile_layout)
 
     async def clear_selection(self, interaction):
         if not await self._guard(interaction):
@@ -631,14 +702,18 @@ class KidoMenuView(ui.View):
     async def status(self, interaction, button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
-        member = _resolve_member(interaction.client, interaction.guild, self.user_id)
-        file, embed = await build_kido_image_embed(self.user_id, member)
-        if not file:
-            embed = build_status_embed(self.user_id)
-            if not embed:
-                return await interaction.response.send_message(KIDO_ACCESS_ERROR, ephemeral=True)
-            return await interaction.response.edit_message(embed=embed, attachments=[], view=self)
-        await interaction.response.edit_message(embed=embed, attachments=[file], view=self)
+        await edit_kido_status_message(interaction, self.user_id, self.from_profile, self.profile_layout)
+
+    @ui.button(label="Usar", style=discord.ButtonStyle.success, row=1)
+    async def usar_kido(self, interaction, button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
+        view = KidoUseMenuView(self.user_id, self.from_profile, self.profile_layout)
+        await interaction.response.edit_message(
+            embed=build_kido_use_menu_embed(view),
+            attachments=[],
+            view=view,
+        )
 
     @ui.button(label="Kidō Oficiais", style=discord.ButtonStyle.secondary, row=0)
     async def oficiais(self, interaction, button):
@@ -731,9 +806,11 @@ class KidoListView(ui.View):
 
 
 class KidoUseMenuView(ui.View):
-    def __init__(self, user_id):
+    def __init__(self, user_id, from_profile=False, profile_layout="desktop"):
         super().__init__(timeout=180)
         self.user_id = user_id
+        self.from_profile = from_profile
+        self.profile_layout = profile_layout
         self.known_by_class = {
             classificacao: list_known_kido_tecnicas(user_id, classificacao)
             for classificacao in ("oficial", "criado", "exclusivo", "proibido")
@@ -745,6 +822,9 @@ class KidoUseMenuView(ui.View):
         self.add_item(kaido)
         self._add_class_button("exclusivo")
         self._add_class_button("proibido")
+        voltar_status = ui.Button(label="Voltar ao Status", style=discord.ButtonStyle.secondary, row=1)
+        voltar_status.callback = self.voltar_status
+        self.add_item(voltar_status)
 
     @property
     def has_categories(self):
@@ -773,7 +853,13 @@ class KidoUseMenuView(ui.View):
                     color=0x7f8cff,
                 )
                 return await interaction.response.edit_message(embed=embed, view=self)
-            view = KidoUseListView(self.user_id, classificacao, tecnicas)
+            view = KidoUseListView(
+                self.user_id,
+                classificacao,
+                tecnicas,
+                self.from_profile,
+                self.profile_layout,
+            )
             await interaction.response.edit_message(embed=view.build_embed(), view=view)
 
         return callback
@@ -781,8 +867,13 @@ class KidoUseMenuView(ui.View):
     async def open_kaido(self, interaction):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
-        view = KidoKaidoActionView(self.user_id)
+        view = KidoKaidoActionView(self.user_id, self.from_profile, self.profile_layout)
         await interaction.response.edit_message(embed=view.build_embed(), view=view)
+
+    async def voltar_status(self, interaction):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Este menu não é seu.", ephemeral=True)
+        await edit_kido_status_message(interaction, self.user_id, self.from_profile, self.profile_layout)
 
 
 class KidoInfoSelect(ui.Select):
@@ -868,21 +959,6 @@ class KidoSystem(commands.Cog):
             return await ctx.send("❌ Você não possui um personagem.")
         await ctx.send(file=file, embed=embed, view=KidoMenuView(ctx.author.id, self.bot))
 
-    @commands.command(name="kido_usar", aliases=["kidō_usar", "kidos_usar", "kidōs_usar"])
-    async def kido_usar(self, ctx):
-        if not has_kido_access(ctx.author.id):
-            return await ctx.send(KIDO_ACCESS_ERROR)
-        view = KidoUseMenuView(ctx.author.id)
-        embed = discord.Embed(
-            title="🔮 Usar Kidō",
-            description="Escolha uma classificação disponível ou abra Kaidō para ações de cura.",
-            color=0x7f8cff,
-        )
-        if not view.has_categories:
-            embed.description = "Você ainda não possui Kidō disponível para conjurar."
-            return await ctx.send(embed=embed)
-        await ctx.send(embed=embed, view=view)
-
     @commands.command(name="kido_criar", aliases=["kidō_criar", "kidos_criar", "kidōs_criar"])
     async def kido_criar(self, ctx):
         if not has_kido_access(ctx.author.id):
@@ -938,10 +1014,6 @@ class KidoSystem(commands.Cog):
             color=0x95a5ff,
         )
         await ctx.send(embed=embed, view=KidoListView())
-
-    @kido.command(name="usar")
-    async def usar(self, ctx):
-        await self.kido_usar(ctx)
 
     @kido.command(name="simular")
     async def simular(self, ctx, numero: int, metodo: str = "normal"):
