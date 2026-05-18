@@ -534,10 +534,10 @@ class VagasView(ui.View):
                 nome, mult, fixo, attr, limite, rest, vid, desc = v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]
                 # Buscar ocupantes
                 cursor = conn.cursor()
-                cursor.execute('''SELECT p.nome FROM player_vagas pv 
-                                  JOIN personagens p ON pv.user_id = p.user_id 
+                cursor.execute('''SELECT pv.user_id, p.nome FROM player_vagas pv
+                                  LEFT JOIN personagens p ON pv.user_id = p.user_id
                                   WHERE pv.vaga_nome = ?''', (nome,))
-                ocupantes = [row[0] for row in cursor.fetchall()]
+                ocupantes = [f"<@{row[0]}>" for row in cursor.fetchall()]
                 
                 lim_str = f"{len(ocupantes)}/{limite}" if limite > 0 else f"{len(ocupantes)}/∞"
                 info = f"**ID:** `{vid}` | **Buff:** `x{mult}/+{fixo}`\n"

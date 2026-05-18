@@ -245,6 +245,12 @@ class GuideSystem(commands.Cog):
                 "kido": "Menu de Kidō; `.kido_criar` permite classificar criações e registros oficiais.",
                 "tecnica": "Menu de técnicas; `.tecnica_criar` registra criações e técnicas oficiais."
             },
+            "Pretensão": {
+                "criar_pretensão": "Define o canal onde a pretensão acontece.",
+                "setar_pretensão": "Configura horários e dias; o menu também tem botão para cancelar a agenda.",
+                "fechar_pretensão": "Fecha a pretensão ativa antes do horário oficial.",
+                "pretensão_config": "Libera ou bloqueia vagas específicas para o resgate."
+            },
             "Dono do Servidor": {
                 "reload": "Recarrega módulos ou reinicia o bot.",
                 "apagar_servidor": "Reset TOTAL do banco de dados (Wipe de sistema).",

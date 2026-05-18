@@ -452,7 +452,8 @@ def setup_db():
         cursor.execute('''CREATE TABLE IF NOT EXISTS canais_bloqueados_bot (canal_id INTEGER PRIMARY KEY)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS config_pretensao (
             id INTEGER PRIMARY KEY CHECK (id = 1), canal_id INTEGER, hora_abrir TEXT DEFAULT '19:00',
-            hora_fechar TEXT DEFAULT '22:00', dias_semana TEXT DEFAULT '0,1,2,3,4,5,6', anunciado INTEGER DEFAULT 0)''')
+            hora_fechar TEXT DEFAULT '22:00', dias_semana TEXT DEFAULT '0,1,2,3,4,5,6',
+            anunciado INTEGER DEFAULT 0, fechado_manual INTEGER DEFAULT 0)''')
         cursor.execute("INSERT OR IGNORE INTO config_pretensao (id) VALUES (1)")
         cursor.execute('''CREATE TABLE IF NOT EXISTS personagens (
             user_id INTEGER PRIMARY KEY, nome TEXT, raca TEXT, forca INTEGER DEFAULT 0,
@@ -566,6 +567,7 @@ def setup_db():
             ('kido_estado', 'ultimo_poder', 'INTEGER DEFAULT 0'),
             ('vagas', 'bloqueada', 'INTEGER DEFAULT 0'),
             ('config_pretensao', 'anunciado', 'INTEGER DEFAULT 0'),
+            ('config_pretensao', 'fechado_manual', 'INTEGER DEFAULT 0'),
             ('kido_tecnicas', 'criador_id', 'INTEGER'),
             ('kido_tecnicas', 'descricao', 'TEXT'),
             ('kido_tecnicas', 'dano_bonus', 'REAL'),
@@ -946,6 +948,14 @@ def get_config_pretensao():
     with get_connection() as conn:
         return conn.execute('SELECT canal_id, hora_abrir, hora_fechar, dias_semana FROM config_pretensao WHERE id = 1').fetchone()
 
+def get_config_pretensao_completa():
+    with get_connection() as conn:
+        return conn.execute('''
+            SELECT canal_id, hora_abrir, hora_fechar, dias_semana, anunciado, fechado_manual
+            FROM config_pretensao
+            WHERE id = 1
+        ''').fetchone()
+
 def set_config_pretensao_canal(canal_id):
     with get_connection() as conn:
         conn.execute('INSERT OR IGNORE INTO config_pretensao (id) VALUES (1)')
@@ -958,11 +968,31 @@ def set_config_pretensao_horarios(hora_abrir, hora_fechar, dias_semana):
         conn.execute(
             '''
             UPDATE config_pretensao
-            SET hora_abrir = ?, hora_fechar = ?, dias_semana = ?
+            SET hora_abrir = ?, hora_fechar = ?, dias_semana = ?, anunciado = 0, fechado_manual = 0
             WHERE id = 1
             ''',
             (hora_abrir, hora_fechar, dias_semana)
         )
+        conn.commit()
+
+def cancelar_config_pretensao():
+    with get_connection() as conn:
+        conn.execute('INSERT OR IGNORE INTO config_pretensao (id) VALUES (1)')
+        conn.execute('''
+            UPDATE config_pretensao
+            SET dias_semana = '', anunciado = 0, fechado_manual = 0
+            WHERE id = 1
+        ''')
+        conn.commit()
+
+def set_pretensao_fechado_manual(fechado=True):
+    with get_connection() as conn:
+        conn.execute('INSERT OR IGNORE INTO config_pretensao (id) VALUES (1)')
+        conn.execute('''
+            UPDATE config_pretensao
+            SET fechado_manual = ?, anunciado = CASE WHEN ? = 1 THEN 0 ELSE anunciado END
+            WHERE id = 1
+        ''', (1 if fechado else 0, 1 if fechado else 0))
         conn.commit()
 
 def get_vagas_bonus(user_id):

@@ -123,11 +123,16 @@ def nivel_reiatsu(valor, limite_index):
 
 def esta_na_janela_pretensao(config):
     if not config or not config[0]: return False
-    canal_id, h_abrir, h_fechar, dias_str = config
+    h_abrir = config[1]
+    h_fechar = config[2]
+    dias_str = config[3]
+    if not h_abrir or not h_fechar or not dias_str:
+        return False
     agora = datetime.datetime.now()
     hora_atual = agora.strftime("%H:%M")
     dia_atual = str(agora.weekday())
-    return (dia_atual in dias_str.split(",")) and (h_abrir <= hora_atual < h_fechar)
+    dias_ativos = [dia.strip() for dia in str(dias_str).split(",") if dia.strip()]
+    return (dia_atual in dias_ativos) and (h_abrir <= hora_atual < h_fechar)
 
 
 def normalize_potencial_attribute(value):
