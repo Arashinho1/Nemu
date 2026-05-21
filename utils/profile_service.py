@@ -1,6 +1,12 @@
 import math
 
-from database import PASSIVE_RACE_CATEGORIES, get_connection, get_vagas_bonus, get_pericia_bonuses
+from database import (
+    PASSIVE_RACE_CATEGORIES,
+    get_connection,
+    get_devour_passive_bonus,
+    get_vagas_bonus,
+    get_pericia_bonuses,
+)
 from utils.attribute_math import (
     non_passive_multiplier,
     passive_attribute_value,
@@ -128,6 +134,15 @@ def _get_structured_modifiers(conn, user_id, attr_key, mult_potencial, potencial
             modifiers.append({"name": nome, "type": "flat", "value": int(fixo), "source": source})
         if mult:
             modifiers.append({"name": nome, "type": "percent", "value": round(float(mult) * 100, 2), "source": source})
+
+    devour_bonus = get_devour_passive_bonus(conn, user_id)
+    if devour_bonus:
+        modifiers.append({
+            "name": f"Devour: {devour_bonus['nome']}",
+            "type": "percent",
+            "value": round(devour_bonus["passive_mult"] * 100, 2),
+            "source": "raca_passiva",
+        })
 
     pericias = conn.execute(
         """

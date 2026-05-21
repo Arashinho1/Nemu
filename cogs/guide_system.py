@@ -91,7 +91,7 @@ class PlayerGuideView(ui.View):
     async def commands_list(self, interaction, button):
         embed = discord.Embed(title="📜 Comandos Úteis", color=0x2ecc71)
         embed.add_field(name="Informação", value="`.perfil`, `.pericia`, `.kido`, `.tecnica`, `.vagas`, `.info ID`, `.buffs`, `.comandos`", inline=False)
-        embed.add_field(name="Ação", value="`.criar`, `.deletar`, `.potencial`, `.p Shikai`, `.passar_turno`, `.pretensão`", inline=False)
+        embed.add_field(name="Ação", value="`.criar`, `.deletar`, `.devour`, `.remover_máscara`, `.potencial`, `.p Shikai`, `.passar_turno`, `.pretensão`", inline=False)
         await interaction.response.edit_message(embed=embed)
 
 class AdminGuideView(ui.View):
@@ -174,6 +174,8 @@ class GuideSystem(commands.Cog):
                 "comandos": "Abre esta lista de comandos."
             },
             "Progressão": {
+                "devour": "Hollow: usa o Devour diário e recebe de 1 a 500 Devours.",
+                "remover_máscara": "Hollow Gillian ou superior: torna-se Arrancar e libera Resurrección.",
                 "pericia": "Abre a tela de perícias/passivas do seu personagem.",
                 "potencial": "Gerencia suas liberações, lista seus potenciais e configura imagem/GIF.",
                 "p": "Ativa ou desativa um potencial. Uso: `.p Shikai` ou `.liberar_potencial Shikai`.",
@@ -231,7 +233,10 @@ class GuideSystem(commands.Cog):
                 "listar_potenciais": "Mostra uma lista técnica de todos os potenciais criados."
             },
             "Recursos & Pontos": {
-                "dar": "Dá pontos para um jogador. Uso: `.dar <pa|pp> @membro valor`.",
+                "dar": "Dá pontos para um jogador. Uso: `.dar <pa|pp|devour> @membro valor`.",
+                "devour_avancar": "Avança um Hollow para o próximo estágio de Devour.",
+                "devour_retroceder": "Retrocede um Hollow para o estágio anterior de Devour.",
+                "devour_setar": "Define o estágio de Devour de um Hollow. Ex: `.devour_setar @membro Gillian`.",
                 "limpar": "Zera os pontos (PA ou PP) disponíveis de um jogador. Uso: .limpar <pa|pp> @membro",
                 "resetar": "Reseta a ficha e progresso de um jogador. Uso: `.resetar @membro`.",
                 "setar_nivel": "Define o patamar de Reiatsu de um jogador.",

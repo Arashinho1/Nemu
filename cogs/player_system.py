@@ -4,11 +4,18 @@ import math
 from discord.ext import commands
 from discord import ui
 from database import (
+    claim_daily_devour,
+    devour_distribution_for_total,
     get_connection,
+    get_devour_state,
     get_vagas_bonus,
     get_canal_logs,
     get_pericia_bonuses,
+    grant_devour,
+    move_devour_stage,
+    remove_hollow_mask,
     roll_vasto_lorde_gene_if_needed,
+    set_devour_stage,
 )
 from utils.attribute_math import (
     passive_attribute_value,
@@ -380,6 +387,7 @@ def delete_player_data(conn, user_id, include_character=True):
         conn.execute('DELETE FROM personagens WHERE user_id = ?', (user_id,))
 
     user_tables = [
+        'player_devour',
         'player_vagas',
         'player_vaga_pontos',
         'player_pericias',
@@ -396,6 +404,88 @@ def delete_player_data(conn, user_id, include_character=True):
 
     conn.execute('DELETE FROM kido_tecnicas WHERE classificacao = ? AND criador_id = ?', ('criado', user_id))
     conn.execute('DELETE FROM tecnicas WHERE classificacao = ? AND criador_id = ?', ('criado', user_id))
+
+
+DEVOUR_STAGE_MESSAGES = {
+    "Strong Hollow": (
+        "A fome deixa de ser apenas instinto. Seu corpo espiritual se condensa, "
+        "e o vazio dentro de você começa a tomar forma."
+    ),
+    "Gillian": (
+        "Vozes demais ecoam no mesmo corpo. A sua presença cresce como uma massa "
+        "espiritual esmagadora, e o mundo percebe que você já não é um Hollow comum."
+    ),
+    "Adjucha": (
+        "A multidão dentro de você se cala. Sua vontade domina a fome, sua forma se "
+        "refina, e a caçada passa a obedecer ao seu nome."
+    ),
+    "Vasto Lorde": (
+        "O vazio encontra uma forma perfeita. Sua existência ultrapassa a fome comum, "
+        "e algo verdadeiramente monstruoso desperta em silêncio."
+    ),
+}
+
+
+def _format_devour_number(value):
+    return f"{int(value):,}".replace(",", ".")
+
+
+def _format_signed_devour(value):
+    value = int(value)
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}{_format_devour_number(abs(value))}"
+
+
+def _format_devour_distribution(delta):
+    return (
+        f"Força {_format_signed_devour(delta['forca'])}, "
+        f"Velocidade {_format_signed_devour(delta['velocidade'])}, "
+        f"Resistência {_format_signed_devour(delta['resistencia'])}"
+    )
+
+
+def _build_devour_message(member, details, *, daily=False):
+    stage = details["stage_after"]["nome"]
+    total = _format_devour_number(details["total_after"])
+    amount_value = int(details["amount"])
+    amount = _format_devour_number(abs(amount_value))
+    delta = _format_devour_distribution(details["distribution_delta"])
+    if amount_value < 0:
+        title = "perdeu"
+    else:
+        title = "devorou" if daily else "recebeu"
+    content = (
+        f"🍖 {member.mention} {title} **{amount} Devour**.\n"
+        f"Total: **{total} Devour** | Estágio: **{stage}**\n"
+        f"PA assimilado: `{delta}`"
+    )
+    if daily and details.get("rolled_amount") and details["rolled_amount"] != details["amount"]:
+        content += f"\nSorteio diário: `{_format_devour_number(details['rolled_amount'])}` Devour."
+    if details.get("capped"):
+        content += f"\nLimite sem gene Vasto Lorde aplicado: `{_format_devour_number(details['cap'])}` Devour."
+    crossed_stages = details.get("crossed_stages") or ([details["stage_after"]] if details["stage_changed"] else [])
+    for crossed in crossed_stages:
+        stage_name = crossed["nome"]
+        stage_msg = DEVOUR_STAGE_MESSAGES.get(stage_name)
+        if stage_msg:
+            content += f"\n\n🌑 **Novo estágio: {stage_name}.** {stage_msg}"
+    if details.get("vasto_blocked"):
+        content += (
+            "\n\n🌘 O limite de **Vasto Lorde** está diante de você, "
+            "mas essa evolução exige um gene que sua alma não possui."
+        )
+    return content
+
+
+def _build_devour_stage_adjust_message(member, details, action):
+    action_text = {
+        "advance": "avançou para",
+        "regress": "retrocedeu para",
+        "set": "foi ajustado para",
+    }.get(action, "foi ajustado para")
+    content = _build_devour_message(member, details)
+    return f"🧬 {member.mention} {action_text} **{details['stage_after']['nome']}**.\n" + content
+
 
 class ModalNome(ui.Modal, title='Registro'):
     nome_input = ui.TextInput(label='Nome do Personagem')
@@ -614,13 +704,39 @@ class PlayerSystem(commands.Cog):
                     return await ctx.send(f"❌ {membro.mention} não possui personagem.")
                 
                 f, v, r, pl_atual = res
-                total_refund = f + v + r
+                devour_state = get_devour_state(conn, membro.id)
+                devour_dist = (
+                    devour_state["distribution"]
+                    if devour_state and devour_state["is_hollow"]
+                    else devour_distribution_for_total(0)
+                )
+                preserved = {
+                    "forca": min(f, devour_dist["forca"]),
+                    "velocidade": min(v, devour_dist["velocidade"]),
+                    "resistencia": min(r, devour_dist["resistencia"]),
+                }
+                total_refund = (
+                    max(0, f - preserved["forca"]) +
+                    max(0, v - preserved["velocidade"]) +
+                    max(0, r - preserved["resistencia"])
+                )
                 if total_refund == 0:
-                    return await ctx.send(f"ℹ️ {membro.mention} não possui pontos de atributos distribuídos.")
+                    return await ctx.send(f"ℹ️ {membro.mention} não possui PA distribuído além do Devour.")
 
                 conn.execute(
-                    'UPDATE personagens SET forca = 0, velocidade = 0, resistencia = 0, pontos_livres = pontos_livres + ? WHERE user_id = ?',
-                    (total_refund, membro.id)
+                    '''
+                    UPDATE personagens
+                    SET forca = ?, velocidade = ?, resistencia = ?,
+                        pontos_livres = pontos_livres + ?
+                    WHERE user_id = ?
+                    ''',
+                    (
+                        preserved["forca"],
+                        preserved["velocidade"],
+                        preserved["resistencia"],
+                        total_refund,
+                        membro.id,
+                    )
                 )
                 conn.commit()
 
@@ -632,10 +748,13 @@ class PlayerSystem(commands.Cog):
                     "pool_label": "PA disponíveis",
                     "pool_before": pl_atual,
                     "pool_after": pl_atual + total_refund,
-                    "extra": "Reset de distribuição de atributos"
+                    "extra": "Reset de distribuição de atributos; PA de Devour preservado"
                 }
             )
-            return await ctx.send(f"✅ Atributos de {membro.mention} resetados. `{total_refund}` PA devolvidos ao saldo.")
+            return await ctx.send(
+                f"✅ Atributos de {membro.mention} resetados. "
+                f"`{total_refund}` PA devolvidos ao saldo; PA de Devour foi preservado."
+            )
 
         elif mode == "pp":
             with get_connection() as conn:
@@ -704,12 +823,165 @@ class PlayerSystem(commands.Cog):
             
         await ctx.send("Escolha sua raça inicial:", view=MenuRaca(races))
 
-    @commands.command(help="(Admin) Dá pontos para um jogador. Uso: .dar <pa|pp> <membro> <valor>")
+    @commands.command(name="devour", help="Hollow: usa o Devour diário e recebe de 1 a 500 Devours.")
+    async def devour(self, ctx):
+        ok, msg, details = claim_daily_devour(ctx.author.id)
+        if not ok:
+            if details and details.get("state"):
+                state = details["state"]
+                total = _format_devour_number(state["total_devour"])
+                stage = state["stage"]["nome"]
+                if details.get("last_amount"):
+                    return await ctx.send(
+                        f"❌ {msg}\n"
+                        f"Último resultado de hoje: `{details['last_amount']}` Devour.\n"
+                        f"Total: **{total} Devour** | Estágio: **{stage}**"
+                    )
+            return await ctx.send(f"❌ {msg}")
+
+        await send_points_history(
+            self.bot,
+            action="Recebimento",
+            point_type="Devour",
+            quantity=details["amount"],
+            giver=ctx.author,
+            receiver=ctx.author,
+            source_channel=ctx.channel,
+            details={
+                "pool_label": "Devours",
+                "pool_before": details["total_before"],
+                "pool_after": details["total_after"],
+                "extra": _format_devour_distribution(details["distribution_delta"]),
+            },
+        )
+        await ctx.send(_build_devour_message(ctx.author, details, daily=True))
+
+    async def _send_devour_adjust_history(self, ctx, membro, details, action_label):
+        await send_points_history(
+            self.bot,
+            action=action_label,
+            point_type="Devour",
+            quantity=abs(details["amount"]),
+            giver=ctx.author,
+            receiver=membro,
+            source_channel=ctx.channel,
+            details={
+                "pool_label": "Devours",
+                "pool_before": details["total_before"],
+                "pool_after": details["total_after"],
+                "extra": _format_devour_distribution(details["distribution_delta"]),
+            },
+        )
+
+    @commands.command(
+        name="devour_avancar",
+        aliases=["devour_avançar", "avancar_devour", "avançar_devour"],
+        help="(Admin) Avança um Hollow para o próximo estágio de Devour.",
+    )
+    @commands.has_permissions(administrator=True)
+    async def devour_avancar(self, ctx, membro: discord.Member):
+        with get_connection() as conn:
+            ok, msg, details = move_devour_stage(conn, membro.id, 1)
+            if ok:
+                conn.commit()
+        if not ok:
+            return await ctx.send(f"❌ {msg}")
+        await self._send_devour_adjust_history(ctx, membro, details, "Ajuste")
+        await ctx.send(_build_devour_stage_adjust_message(membro, details, "advance"))
+
+    @commands.command(
+        name="devour_retroceder",
+        aliases=["retroceder_devour", "regredir_devour", "devour_regredir"],
+        help="(Admin) Retrocede um Hollow para o estágio anterior de Devour.",
+    )
+    @commands.has_permissions(administrator=True)
+    async def devour_retroceder(self, ctx, membro: discord.Member):
+        with get_connection() as conn:
+            ok, msg, details = move_devour_stage(conn, membro.id, -1)
+            if ok:
+                conn.commit()
+        if not ok:
+            return await ctx.send(f"❌ {msg}")
+        await self._send_devour_adjust_history(ctx, membro, details, "Ajuste")
+        await ctx.send(_build_devour_stage_adjust_message(membro, details, "regress"))
+
+    @commands.command(
+        name="devour_setar",
+        aliases=["setar_devour", "setar_estagio", "setar_estágio", "devour_setar_estagio", "devour_setar_estágio"],
+        help='(Admin) Define o estágio de Devour de um Hollow. Ex: `.devour_setar @membro Gillian`.',
+    )
+    @commands.has_permissions(administrator=True)
+    async def devour_setar(self, ctx, membro: discord.Member, *, estagio: str):
+        with get_connection() as conn:
+            ok, msg, details = set_devour_stage(conn, membro.id, estagio)
+            if ok:
+                conn.commit()
+        if not ok:
+            return await ctx.send(f"❌ {msg}")
+        await self._send_devour_adjust_history(ctx, membro, details, "Ajuste")
+        await ctx.send(_build_devour_stage_adjust_message(membro, details, "set"))
+
+    @commands.command(
+        name="remover_máscara",
+        aliases=["remover_mascara", "tirar_máscara", "tirar_mascara", "quebrar_máscara", "quebrar_mascara"],
+        help="Hollow Gillian ou superior: remove a máscara e se torna Arrancar.",
+    )
+    async def remover_mascara(self, ctx):
+        with get_connection() as conn:
+            ok, msg, details = remove_hollow_mask(conn, ctx.author.id)
+            if ok:
+                conn.commit()
+        if not ok:
+            if details and details.get("total_devour") is not None:
+                total = _format_devour_number(details["total_devour"])
+                return await ctx.send(f"❌ {msg}\nTotal atual: **{total} Devour** | Estágio: **{details['stage']['nome']}**")
+            return await ctx.send(f"❌ {msg}")
+
+        removed = _format_devour_distribution({
+            "forca": -details["distribution_removed"]["forca"],
+            "velocidade": -details["distribution_removed"]["velocidade"],
+            "resistencia": -details["distribution_removed"]["resistencia"],
+        })
+        await ctx.send(
+            f"🎭 {ctx.author.mention} removeu a máscara e renasceu como **Arrancar**.\n"
+            f"Estágio anterior: **{details['stage']['nome']}** (`{_format_devour_number(details['total_devour'])}` Devour).\n"
+            f"Benefícios de Devour removidos: `{removed}`\n\n"
+            f"🔥 Potencial **{details['potential']}** liberado. Use `.p {details['potential']}` para ativar "
+            "a liberação `5x` por `5` turnos."
+        )
+
+    @commands.command(help="(Admin) Dá pontos para um jogador. Uso: .dar <pa|pp|devour> <membro> <valor>")
     @commands.has_permissions(administrator=True)
     async def dar(self, ctx, tipo: str, membro: discord.Member, valor: int):
-        coluna = "pontos_livres" if tipo.lower() == "pa" else "pontos_pericia" if tipo.lower() == "pp" else None
+        tipo_lower = tipo.lower()
+        if tipo_lower in ("devour", "devours"):
+            with get_connection() as conn:
+                ok, msg, details = grant_devour(conn, membro.id, valor)
+                if ok:
+                    conn.commit()
+            if not ok:
+                return await ctx.send(f"❌ {msg}")
+
+            await send_points_history(
+                self.bot,
+                action="Recebimento",
+                point_type="Devour",
+                quantity=details["amount"],
+                giver=ctx.author,
+                receiver=membro,
+                source_channel=ctx.channel,
+                details={
+                    "pool_label": "Devours",
+                    "pool_before": details["total_before"],
+                    "pool_after": details["total_after"],
+                    "extra": _format_devour_distribution(details["distribution_delta"]),
+                },
+            )
+            return await ctx.send(_build_devour_message(membro, details))
+
+        coluna = "pontos_livres" if tipo_lower == "pa" else "pontos_pericia" if tipo_lower == "pp" else None
         if not coluna:
-            return await ctx.send("❌ Tipo inválido. Use `pa` (Atributos) ou `pp` (Perícia).")
+            return await ctx.send("❌ Tipo inválido. Use `pa` (Atributos), `pp` (Perícia) ou `devour`.")
             
         with get_connection() as conn:
             res = conn.execute(f'SELECT {coluna} FROM personagens WHERE user_id = ?', (membro.id,)).fetchone()
@@ -718,7 +990,7 @@ class PlayerSystem(commands.Cog):
             conn.execute(f'UPDATE personagens SET {coluna} = {coluna} + ? WHERE user_id = ?', (valor, membro.id))
             conn.commit()
         
-        label = "Pontos de Atributos (PA)" if tipo.lower() == "pa" else "Pontos de Perícia (PP)"
+        label = "Pontos de Atributos (PA)" if tipo_lower == "pa" else "Pontos de Perícia (PP)"
         await send_points_history(
             self.bot,
             action="Recebimento",

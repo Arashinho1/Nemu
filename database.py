@@ -2,6 +2,12 @@ import os
 import sqlite3
 import unicodedata
 import random
+from datetime import datetime
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
 
 from utils.default_vagas import DEFAULT_VAGAS
 
@@ -9,6 +15,20 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rpg_bleach.d
 PHYSICAL_ATTRIBUTES = ('forca', 'velocidade', 'resistencia')
 PASSIVE_RACE_CATEGORIES = ('Raças Iniciais', 'Raças Normais', 'Raças Especiais')
 GENE_VASTO_LORDE_CHANCE = 0.01
+DEVOUR_TIMEZONE = "America/Sao_Paulo"
+DEVOUR_DAILY_MIN = 1
+DEVOUR_DAILY_MAX = 500
+DEVOUR_NO_GENE_CAP = 40000
+RESURRECCION_POTENCIAL_NAME = "Resurrección"
+ARRANCAR_RACE_NAME = "Arrancar"
+DEVOUR_STAGES = (
+    {"nome": "Weak Hollow", "minimo": 0, "multiplicador": 1.0, "requer_gene": False},
+    {"nome": "Strong Hollow", "minimo": 1500, "multiplicador": 1.2, "requer_gene": False},
+    {"nome": "Gillian", "minimo": 5000, "multiplicador": 1.4, "requer_gene": False},
+    {"nome": "Adjucha", "minimo": 25000, "multiplicador": 1.6, "requer_gene": False},
+    {"nome": "Vasto Lorde", "minimo": 50000, "multiplicador": 2.5, "requer_gene": True},
+)
+HOLLOW_RACE_KEYS = {"hollow", "weakhollow", "stronghollow", "gillian", "adjucha", "vastolorde"}
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -335,6 +355,31 @@ def _pericia_key(value):
     return ''.join(char for char in ascii_text.casefold() if char.isalnum())
 
 
+def _is_hollow_race(value):
+    return _pericia_key(value) in HOLLOW_RACE_KEYS
+
+
+def _stage_key(value):
+    return _pericia_key(value)
+
+
+DEVOUR_STAGE_ALIASES = {}
+for _stage in DEVOUR_STAGES:
+    _key = _stage_key(_stage["nome"])
+    DEVOUR_STAGE_ALIASES[_key] = _stage
+    DEVOUR_STAGE_ALIASES[_key.replace("hollow", "")] = _stage
+DEVOUR_STAGE_ALIASES.update({
+    "weak": DEVOUR_STAGES[0],
+    "fraco": DEVOUR_STAGES[0],
+    "strong": DEVOUR_STAGES[1],
+    "forte": DEVOUR_STAGES[1],
+    "gillian": DEVOUR_STAGES[2],
+    "adjucha": DEVOUR_STAGES[3],
+    "vasto": DEVOUR_STAGES[4],
+    "vastolorde": DEVOUR_STAGES[4],
+})
+
+
 BLOCKED_TECNICA_VARIANTS = {_pericia_key(name) for name in BLOCKED_TECNICA_VARIANT_NAMES}
 
 
@@ -361,8 +406,36 @@ def _ensure_vasto_lorde_gene_table(cursor):
         criado_em TEXT DEFAULT CURRENT_TIMESTAMP)''')
 
 
+def _ensure_devour_tables(cursor):
+    cursor.execute('''CREATE TABLE IF NOT EXISTS player_devour (
+        user_id INTEGER PRIMARY KEY,
+        total_devour INTEGER NOT NULL DEFAULT 0,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+        atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS player_devour_daily (
+        user_id INTEGER PRIMARY KEY,
+        ultimo_resgate TEXT,
+        ultimo_valor INTEGER DEFAULT 0,
+        atualizado_em TEXT DEFAULT CURRENT_TIMESTAMP)''')
+
+
+def ensure_resurreccion_potential(conn_or_cursor):
+    cursor = conn_or_cursor.cursor() if hasattr(conn_or_cursor, "cursor") else conn_or_cursor
+    cursor.execute(
+        '''
+        INSERT INTO potenciais (nome, multiplicador, duracao, cooldown, custo_ativacao, custo_turno)
+        VALUES (?, 5.0, 5, 0, 0, 0)
+        ON CONFLICT(nome) DO UPDATE
+        SET multiplicador = 5.0,
+            duracao = 5,
+            cooldown = 0
+        ''',
+        (RESURRECCION_POTENCIAL_NAME,),
+    )
+
+
 def roll_vasto_lorde_gene_if_needed(conn, user_id, raca):
-    if _pericia_key(raca) != 'hollow':
+    if not _is_hollow_race(raca):
         return None
 
     cursor = conn.cursor()
@@ -384,6 +457,414 @@ def roll_vasto_lorde_gene_if_needed(conn, user_id, raca):
         (user_id, int(possui_gene), GENE_VASTO_LORDE_CHANCE, roll),
     )
     return possui_gene
+
+
+def has_vasto_lorde_gene(conn, user_id):
+    _ensure_vasto_lorde_gene_table(conn.cursor())
+    row = conn.execute(
+        'SELECT possui_gene FROM player_gene_vasto_lorde WHERE user_id = ?',
+        (user_id,),
+    ).fetchone()
+    return bool(row and row[0])
+
+
+def get_devour_stage(total_devour, has_gene=False):
+    total_devour = max(0, int(total_devour or 0))
+    current = DEVOUR_STAGES[0]
+    for stage in DEVOUR_STAGES:
+        if total_devour < stage["minimo"]:
+            continue
+        if stage["requer_gene"] and not has_gene:
+            continue
+        current = stage
+    return dict(current)
+
+
+def find_devour_stage(value):
+    stage = DEVOUR_STAGE_ALIASES.get(_stage_key(value))
+    return dict(stage) if stage else None
+
+
+def _devour_stage_index(stage_name):
+    key = _stage_key(stage_name)
+    for index, stage in enumerate(DEVOUR_STAGES):
+        if _stage_key(stage["nome"]) == key:
+            return index
+    return None
+
+
+def devour_distribution_for_total(total_devour):
+    total_devour = max(0, int(total_devour or 0))
+    base, remainder = divmod(total_devour, len(PHYSICAL_ATTRIBUTES))
+    return {
+        "forca": base + (1 if remainder >= 1 else 0),
+        "velocidade": base + (1 if remainder >= 2 else 0),
+        "resistencia": base,
+    }
+
+
+def _today_devour_key():
+    if ZoneInfo is not None:
+        try:
+            return datetime.now(ZoneInfo(DEVOUR_TIMEZONE)).date().isoformat()
+        except Exception:
+            pass
+    return datetime.now().date().isoformat()
+
+
+def get_devour_state(conn, user_id):
+    cursor = conn.cursor()
+    _ensure_devour_tables(cursor)
+    _ensure_vasto_lorde_gene_table(cursor)
+    row = conn.execute(
+        '''
+        SELECT p.raca, COALESCE(d.total_devour, 0)
+        FROM personagens p
+        LEFT JOIN player_devour d ON d.user_id = p.user_id
+        WHERE p.user_id = ?
+        ''',
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return None
+
+    raca, total_devour = row
+    has_gene = has_vasto_lorde_gene(conn, user_id)
+    stage = get_devour_stage(total_devour, has_gene)
+    distribution = devour_distribution_for_total(total_devour)
+    next_stage = None
+    for candidate in DEVOUR_STAGES:
+        if candidate["minimo"] <= int(total_devour or 0):
+            continue
+        if candidate["requer_gene"] and not has_gene:
+            continue
+        next_stage = dict(candidate)
+        break
+    return {
+        "user_id": user_id,
+        "raca": raca,
+        "is_hollow": _is_hollow_race(raca),
+        "has_gene": has_gene,
+        "total_devour": int(total_devour or 0),
+        "stage": stage,
+        "next_stage": next_stage,
+        "distribution": distribution,
+    }
+
+
+def get_devour_passive_bonus(conn, user_id):
+    state = get_devour_state(conn, user_id)
+    if not state or not state["is_hollow"]:
+        return None
+    multiplier = float(state["stage"]["multiplicador"])
+    passive_mult = max(0.0, multiplier - 1.0)
+    if passive_mult <= 0:
+        return None
+    return {
+        "nome": state["stage"]["nome"],
+        "multiplicador": multiplier,
+        "passive_mult": passive_mult,
+        "total_devour": state["total_devour"],
+    }
+
+
+def _get_devour_character_row(conn, user_id):
+    return conn.execute(
+        'SELECT raca, forca, velocidade, resistencia FROM personagens WHERE user_id = ?',
+        (user_id,),
+    ).fetchone()
+
+
+def _current_devour_total(conn, user_id):
+    row = conn.execute(
+        'SELECT total_devour FROM player_devour WHERE user_id = ?',
+        (user_id,),
+    ).fetchone()
+    return int(row[0] if row else 0)
+
+
+def _build_devour_details(total_before, total_after, has_gene, requested_amount=None, reason=None):
+    stage_before = get_devour_stage(total_before, has_gene)
+    stage_after = get_devour_stage(total_after, has_gene)
+    crossed_stages = [
+        dict(stage)
+        for stage in DEVOUR_STAGES
+        if stage["minimo"] > total_before
+        and stage["minimo"] <= total_after
+        and not (stage["requer_gene"] and not has_gene)
+    ]
+    dist_before = devour_distribution_for_total(total_before)
+    dist_after = devour_distribution_for_total(total_after)
+    delta = {attr: dist_after[attr] - dist_before[attr] for attr in PHYSICAL_ATTRIBUTES}
+    amount = total_after - total_before
+    return {
+        "total_before": total_before,
+        "total_after": total_after,
+        "amount": amount,
+        "requested_amount": requested_amount if requested_amount is not None else amount,
+        "stage_before": stage_before,
+        "stage_after": stage_after,
+        "stage_changed": stage_before["nome"] != stage_after["nome"],
+        "crossed_stages": crossed_stages,
+        "distribution_delta": delta,
+        "distribution_total": dist_after,
+        "has_gene": has_gene,
+        "capped": requested_amount is not None and amount != requested_amount,
+        "cap": DEVOUR_NO_GENE_CAP if not has_gene else None,
+        "vasto_blocked": total_after >= DEVOUR_NO_GENE_CAP and not has_gene,
+        "reason": reason,
+    }
+
+
+def _apply_devour_total(conn, user_id, total_after, has_gene, requested_amount=None, reason=None):
+    total_after = max(0, int(total_after or 0))
+    if not has_gene:
+        total_after = min(total_after, DEVOUR_NO_GENE_CAP)
+
+    row = _get_devour_character_row(conn, user_id)
+    if not row:
+        return False, "Personagem nao encontrado.", None
+
+    raca = row[0]
+    if not _is_hollow_race(raca):
+        return False, "Apenas personagens Hollow podem receber Devour.", None
+
+    total_before = _current_devour_total(conn, user_id)
+    if total_after == total_before:
+        details = _build_devour_details(total_before, total_after, has_gene, requested_amount, reason)
+        return False, "O Devour do personagem já está nesse valor.", details
+
+    dist_before = devour_distribution_for_total(total_before)
+    dist_after = devour_distribution_for_total(total_after)
+    _, forca, velocidade, resistencia = row
+    bases = {"forca": int(forca or 0), "velocidade": int(velocidade or 0), "resistencia": int(resistencia or 0)}
+    new_attrs = {
+        attr: max(0, bases[attr] - dist_before[attr]) + dist_after[attr]
+        for attr in PHYSICAL_ATTRIBUTES
+    }
+
+    conn.execute(
+        '''
+        INSERT INTO player_devour (user_id, total_devour, atualizado_em)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id) DO UPDATE
+        SET total_devour = excluded.total_devour,
+            atualizado_em = CURRENT_TIMESTAMP
+        ''',
+        (user_id, total_after),
+    )
+    conn.execute(
+        '''
+        UPDATE personagens
+        SET forca = ?,
+            velocidade = ?,
+            resistencia = ?
+        WHERE user_id = ?
+        ''',
+        (new_attrs["forca"], new_attrs["velocidade"], new_attrs["resistencia"], user_id),
+    )
+
+    details = _build_devour_details(total_before, total_after, has_gene, requested_amount, reason)
+    return True, "Devour concedido.", details
+
+
+def grant_devour(conn, user_id, quantidade):
+    try:
+        quantidade = int(quantidade)
+    except (TypeError, ValueError):
+        return False, "Quantidade invalida.", None
+    if quantidade <= 0:
+        return False, "A quantidade deve ser maior que zero.", None
+
+    cursor = conn.cursor()
+    _ensure_devour_tables(cursor)
+    _ensure_vasto_lorde_gene_table(cursor)
+    row = _get_devour_character_row(conn, user_id)
+    if not row:
+        return False, "Personagem nao encontrado.", None
+    if not _is_hollow_race(row[0]):
+        return False, "Apenas personagens Hollow podem receber Devour.", None
+
+    has_gene = has_vasto_lorde_gene(conn, user_id)
+    total_before = _current_devour_total(conn, user_id)
+    total_after = total_before + quantidade
+    ok, msg, details = _apply_devour_total(
+        conn,
+        user_id,
+        total_after,
+        has_gene,
+        requested_amount=quantidade,
+        reason="grant",
+    )
+    if not ok and details and details.get("total_after") == DEVOUR_NO_GENE_CAP and not has_gene:
+        return False, f"Este Hollow já atingiu o limite de {DEVOUR_NO_GENE_CAP} Devour sem o gene Vasto Lorde.", details
+    return ok, msg, details
+
+
+def set_devour_stage(conn, user_id, stage_name):
+    stage = find_devour_stage(stage_name)
+    if not stage:
+        return False, "Estágio de Devour inválido.", None
+
+    cursor = conn.cursor()
+    _ensure_devour_tables(cursor)
+    _ensure_vasto_lorde_gene_table(cursor)
+    row = _get_devour_character_row(conn, user_id)
+    if not row:
+        return False, "Personagem nao encontrado.", None
+    if not _is_hollow_race(row[0]):
+        return False, "Apenas personagens Hollow podem ter estágio de Devour ajustado.", None
+
+    has_gene = has_vasto_lorde_gene(conn, user_id)
+    if stage["requer_gene"] and not has_gene:
+        return False, "Vasto Lorde só é possível para quem possui o gene Vasto Lorde.", None
+
+    return _apply_devour_total(
+        conn,
+        user_id,
+        stage["minimo"],
+        has_gene,
+        requested_amount=stage["minimo"] - _current_devour_total(conn, user_id),
+        reason="set_stage",
+    )
+
+
+def move_devour_stage(conn, user_id, direction):
+    cursor = conn.cursor()
+    _ensure_devour_tables(cursor)
+    _ensure_vasto_lorde_gene_table(cursor)
+    state = get_devour_state(conn, user_id)
+    if not state:
+        return False, "Personagem nao encontrado.", None
+    if not state["is_hollow"]:
+        return False, "Apenas personagens Hollow podem ter estágio de Devour ajustado.", None
+
+    current_index = _devour_stage_index(state["stage"]["nome"])
+    if current_index is None:
+        return False, "Não consegui identificar o estágio atual.", None
+
+    target_index = current_index + (1 if direction > 0 else -1)
+    if target_index < 0:
+        return False, "Este Hollow já está no primeiro estágio.", None
+    if target_index >= len(DEVOUR_STAGES):
+        return False, "Este Hollow já está no último estágio.", None
+
+    target_stage = DEVOUR_STAGES[target_index]
+    if target_stage["requer_gene"] and not state["has_gene"]:
+        return False, "Vasto Lorde só é possível para quem possui o gene Vasto Lorde.", None
+
+    return _apply_devour_total(
+        conn,
+        user_id,
+        target_stage["minimo"],
+        state["has_gene"],
+        requested_amount=target_stage["minimo"] - state["total_devour"],
+        reason="advance_stage" if direction > 0 else "regress_stage",
+    )
+
+
+def remove_hollow_mask(conn, user_id):
+    cursor = conn.cursor()
+    _ensure_devour_tables(cursor)
+    _ensure_vasto_lorde_gene_table(cursor)
+    row = _get_devour_character_row(conn, user_id)
+    if not row:
+        return False, "Personagem nao encontrado.", None
+
+    raca, forca, velocidade, resistencia = row
+    if not _is_hollow_race(raca):
+        return False, "Apenas Hollows podem remover a máscara por este caminho.", None
+
+    state = get_devour_state(conn, user_id)
+    gillian_stage = find_devour_stage("Gillian")
+    if state["total_devour"] < gillian_stage["minimo"]:
+        return False, "O Hollow precisa estar pelo menos no estágio Gillian para remover a máscara.", state
+
+    dist = state["distribution"]
+    bases = {"forca": int(forca or 0), "velocidade": int(velocidade or 0), "resistencia": int(resistencia or 0)}
+    new_attrs = {
+        attr: max(0, bases[attr] - dist[attr])
+        for attr in PHYSICAL_ATTRIBUTES
+    }
+
+    ensure_resurreccion_potential(cursor)
+    conn.execute(
+        '''
+        UPDATE personagens
+        SET raca = ?,
+            forca = ?,
+            velocidade = ?,
+            resistencia = ?
+        WHERE user_id = ?
+        ''',
+        (
+            ARRANCAR_RACE_NAME,
+            new_attrs["forca"],
+            new_attrs["velocidade"],
+            new_attrs["resistencia"],
+            user_id,
+        ),
+    )
+    conn.execute(
+        '''
+        INSERT OR IGNORE INTO player_potencial (user_id, potencial)
+        VALUES (?, ?)
+        ''',
+        (user_id, RESURRECCION_POTENCIAL_NAME),
+    )
+    return True, "Máscara removida.", {
+        "previous_race": raca,
+        "new_race": ARRANCAR_RACE_NAME,
+        "stage": state["stage"],
+        "total_devour": state["total_devour"],
+        "distribution_removed": dist,
+        "potential": RESURRECCION_POTENCIAL_NAME,
+    }
+
+
+def claim_daily_devour(user_id):
+    today = _today_devour_key()
+    quantidade = random.randint(DEVOUR_DAILY_MIN, DEVOUR_DAILY_MAX)
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        _ensure_devour_tables(cursor)
+        state = get_devour_state(conn, user_id)
+        if not state:
+            return False, "Personagem nao encontrado.", None
+        if not state["is_hollow"]:
+            return False, "Apenas personagens Hollow podem usar Devour.", {"state": state}
+
+        row = conn.execute(
+            'SELECT ultimo_resgate, ultimo_valor FROM player_devour_daily WHERE user_id = ?',
+            (user_id,),
+        ).fetchone()
+        if row and row[0] == today:
+            state = get_devour_state(conn, user_id)
+            return False, "Você já usou o Devour diário hoje.", {
+                "today": today,
+                "last_amount": int(row[1] or 0),
+                "state": state,
+            }
+
+        ok, msg, details = grant_devour(conn, user_id, quantidade)
+        if not ok:
+            return False, msg, details
+
+        details["rolled_amount"] = quantidade
+        conn.execute(
+            '''
+            INSERT INTO player_devour_daily (user_id, ultimo_resgate, ultimo_valor, atualizado_em)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE
+            SET ultimo_resgate = excluded.ultimo_resgate,
+                ultimo_valor = excluded.ultimo_valor,
+                atualizado_em = CURRENT_TIMESTAMP
+            ''',
+            (user_id, today, quantidade),
+        )
+        conn.commit()
+        details["today"] = today
+        return True, msg, details
 
 
 def _deleted_default_vaga_identity_sets(cursor):
@@ -589,6 +1070,7 @@ def setup_db():
             limite_nivel INTEGER DEFAULT 0, slots_potencial INTEGER DEFAULT 1, 
             pontos_pericia INTEGER DEFAULT 0)''')
         _ensure_vasto_lorde_gene_table(cursor)
+        _ensure_devour_tables(cursor)
         cursor.execute('''CREATE TABLE IF NOT EXISTS potenciais (
             nome TEXT PRIMARY KEY, multiplicador REAL, duracao INTEGER, cooldown INTEGER DEFAULT 0,
             custo_ativacao INTEGER DEFAULT 0, custo_turno INTEGER DEFAULT 0,
@@ -745,6 +1227,8 @@ def setup_db():
         for table, col, detail in columns:
             try: cursor.execute(f'ALTER TABLE {table} ADD COLUMN {col} {detail}')
             except sqlite3.OperationalError: pass
+
+        ensure_resurreccion_potential(cursor)
 
         cursor.execute('''CREATE TABLE IF NOT EXISTS schema_migrations (
             id TEXT PRIMARY KEY,
@@ -1217,6 +1701,7 @@ def get_vagas_bonus(user_id):
             FROM player_vagas pv JOIN vagas v ON pv.vaga_nome = v.nome 
             WHERE pv.user_id = ?
         ''', (user_id,)).fetchall()
+        devour_bonus = get_devour_passive_bonus(conn, user_id)
     
     bonuses = {
         k: {
@@ -1244,6 +1729,11 @@ def get_vagas_bonus(user_id):
                 else:
                     bonuses[k]['non_passive_mult'] += mult
                     bonuses[k]['non_passive_fixo'] += fixo
+    if devour_bonus:
+        passive_mult = devour_bonus["passive_mult"]
+        for k in bonuses:
+            bonuses[k]['mult'] += passive_mult
+            bonuses[k]['passive_mult'] += passive_mult
     return bonuses
 
 
