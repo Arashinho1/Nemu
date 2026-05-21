@@ -1,6 +1,12 @@
 import math
 
-from database import get_connection, get_vagas_bonus, get_pericia_bonuses
+from database import PASSIVE_RACE_CATEGORIES, get_connection, get_vagas_bonus, get_pericia_bonuses
+from utils.attribute_math import (
+    non_passive_multiplier,
+    passive_attribute_value,
+    passive_attributes,
+    reiatsu_multiplier as build_reiatsu_multiplier,
+)
 from utils.logic import (
     calcular_reiatsu,
     calcular_reiatsu_efetiva,
@@ -55,16 +61,25 @@ def _format_percent(value):
 
 def _modifier_label(modifier):
     value = modifier["value"]
+    suffix = " passivo" if modifier.get("source") == "raca_passiva" else ""
     if modifier["type"] == "percent":
-        return f"{modifier['name']} +{_format_percent(value / 100)}"
+        return f"{modifier['name']} +{_format_percent(value / 100)}{suffix}"
     if modifier["type"] == "multiplier":
-        return f"{modifier['name']} x{value:.2f}"
-    return f"{modifier['name']} +{int(value)}"
+        return f"{modifier['name']} x{value:.2f}{suffix}"
+    return f"{modifier['name']} +{int(value)}{suffix}"
 
 
 def _modifier_total_text(modifiers):
     if not modifiers:
         return "Sem modificadores"
+    passive = sum(1 for modifier in modifiers if modifier.get("source") == "raca_passiva")
+    active = len(modifiers) - passive
+    if passive and not active:
+        return f"{passive} bonus racial passivo" + ("" if passive == 1 else "s")
+    if passive and active:
+        passive_text = f"{passive} passivo" + ("" if passive == 1 else "s")
+        active_text = f"{active} ativo" + ("" if active == 1 else "s")
+        return f"{passive_text}, {active_text}"
     return f"{len(modifiers)} modificador" + ("" if len(modifiers) == 1 else "es") + " ativo" + ("" if len(modifiers) == 1 else "s")
 
 
@@ -97,21 +112,22 @@ def _get_structured_modifiers(conn, user_id, attr_key, mult_potencial, potencial
 
     vagas = conn.execute(
         """
-        SELECT v.nome, v.multiplicador, v.bonus_fixo, v.atributo
+        SELECT v.nome, v.multiplicador, v.bonus_fixo, v.atributo, v.categoria
         FROM player_vagas pv
         JOIN vagas v ON pv.vaga_nome = v.nome
         WHERE pv.user_id = ?
         """,
         (user_id,),
     ).fetchall()
-    for nome, mult, fixo, targets in vagas:
+    for nome, mult, fixo, targets, categoria in vagas:
         target_list = _attribute_targets(targets)
-        if "todos" not in target_list and attr_key not in target_list:
+        if attr_key not in target_list:
             continue
+        source = "raca_passiva" if categoria in PASSIVE_RACE_CATEGORIES else "vaga"
         if fixo:
-            modifiers.append({"name": nome, "type": "flat", "value": int(fixo), "source": "vaga"})
+            modifiers.append({"name": nome, "type": "flat", "value": int(fixo), "source": source})
         if mult:
-            modifiers.append({"name": nome, "type": "percent", "value": round(float(mult) * 100, 2), "source": "vaga"})
+            modifiers.append({"name": nome, "type": "percent", "value": round(float(mult) * 100, 2), "source": source})
 
     pericias = conn.execute(
         """
@@ -218,13 +234,20 @@ def get_profile_data(user_id):
             for mod in manual_mods:
                 if mod["type"] == "multiplier":
                     manual_multiplier *= mod["value"]
-            mult = (1.0 + bonus["mult"] + pericia_bonus.get(key, 0.0) + manual_percent) * mult_potencial * manual_multiplier
-            final = int((base + bonus["fixo"] + manual_flat) * mult)
+            passive_value = passive_attribute_value(base, bonus)
+            mult = (
+                1.0
+                + non_passive_multiplier(bonus)
+                + pericia_bonus.get(key, 0.0)
+                + manual_percent
+            ) * mult_potencial * manual_multiplier
+            final = int((passive_value + manual_flat) * mult)
             modifiers = _get_structured_modifiers(conn, user_id, key, mult_potencial, potencial_attr_nome, potencial_ativo)
             return {
                 "key": key,
                 "label": ATTRIBUTES[key],
                 "base": base,
+                "passive": passive_value,
                 "final": final,
                 "bonus": final - base,
                 "fixed_bonus": bonus["fixo"],
@@ -240,19 +263,25 @@ def get_profile_data(user_id):
             "resistencia": attr_payload("resistencia", resistencia),
         }
 
+    permanent_attrs = passive_attributes(
+        {"forca": forca, "velocidade": velocidade, "resistencia": resistencia},
+        vagas_bonus,
+    )
     reiryoku_base = calcular_reiryoku(
-        forca + vagas_bonus["forca"]["fixo"],
-        velocidade + vagas_bonus["velocidade"]["fixo"],
-        resistencia + vagas_bonus["resistencia"]["fixo"],
+        permanent_attrs["forca"],
+        permanent_attrs["velocidade"],
+        permanent_attrs["resistencia"],
     )
     reiryoku_mult = 1.0 + pericia_bonus.get("reiryoku", 0.0)
     reiryoku_max = int(reiryoku_base * reiryoku_mult)
     reiryoku = _sync_reiryoku_state(user_id, reiryoku_max)
-    reiatsu_multiplier = (
-        1.0 + vagas_bonus["forca"]["mult"] + pericia_bonus.get("forca", 0.0) + pericia_bonus.get("reiatsu", 0.0)
-    ) * potencial_effects["multipliers"].get("forca", 1.0)
-    reiatsu_max = calcular_reiatsu_maxima(reiryoku_max, reiatsu_multiplier)
-    reiatsu = calcular_reiatsu_efetiva(reiryoku, reiryoku_max, reiatsu_multiplier)
+    reiatsu_mult = build_reiatsu_multiplier(
+        vagas_bonus["forca"],
+        pericia_bonus,
+        potencial_effects["multipliers"].get("forca", 1.0),
+    )
+    reiatsu_max = calcular_reiatsu_maxima(reiryoku_max, reiatsu_mult)
+    reiatsu = calcular_reiatsu_efetiva(reiryoku, reiryoku_max, reiatsu_mult)
     cap = reiatsu_cap_for_limit_index(limite_idx)
     cap_payload = None if math.isinf(float(cap)) else cap
 
@@ -327,15 +356,19 @@ def distribute_attribute(user_id, attribute, amount, return_details=False):
         new_velocidade = velocidade + (amount if attribute == "velocidade" else 0)
         new_resistencia = resistencia + (amount if attribute == "resistencia" else 0)
 
+        permanent_attrs = passive_attributes(
+            {"forca": new_forca, "velocidade": new_velocidade, "resistencia": new_resistencia},
+            vagas_bonus,
+        )
         reiryoku = calcular_reiryoku(
-            new_forca + vagas_bonus["forca"]["fixo"],
-            new_velocidade + vagas_bonus["velocidade"]["fixo"],
-            new_resistencia + vagas_bonus["resistencia"]["fixo"],
+            permanent_attrs["forca"],
+            permanent_attrs["velocidade"],
+            permanent_attrs["resistencia"],
         )
         reiryoku = int(reiryoku * (1.0 + pericia_bonus.get("reiryoku", 0.0)))
         reiatsu = calcular_reiatsu(
             reiryoku,
-            1.0 + vagas_bonus["forca"]["mult"] + pericia_bonus.get("forca", 0.0) + pericia_bonus.get("reiatsu", 0.0),
+            build_reiatsu_multiplier(vagas_bonus["forca"], pericia_bonus),
         )
         cap = reiatsu_cap_for_limit_index(limite_idx)
         if reiatsu > cap:

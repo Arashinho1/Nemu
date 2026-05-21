@@ -3,7 +3,18 @@ import asyncio
 import math
 from discord.ext import commands
 from discord import ui
-from database import get_connection, get_vagas_bonus, get_canal_logs, get_pericia_bonuses
+from database import (
+    get_connection,
+    get_vagas_bonus,
+    get_canal_logs,
+    get_pericia_bonuses,
+    roll_vasto_lorde_gene_if_needed,
+)
+from utils.attribute_math import (
+    passive_attribute_value,
+    passive_attributes,
+    reiatsu_multiplier as build_reiatsu_multiplier,
+)
 from utils.logic import (
     REIATSU_LIMITS,
     SPIRITUAL_POWER_LEVELS,
@@ -343,13 +354,17 @@ def get_current_reiatsu_limit_index(user_id):
     forca, velocidade, resistencia, limite_atual = res
     v_bonuses = get_vagas_bonus(user_id)
     per_bonuses = get_pericia_bonuses(user_id)
+    permanent_attrs = passive_attributes(
+        {"forca": forca, "velocidade": velocidade, "resistencia": resistencia},
+        v_bonuses,
+    )
     reiryoku = calcular_reiryoku(
-        forca + v_bonuses["forca"]["fixo"],
-        velocidade + v_bonuses["velocidade"]["fixo"],
-        resistencia + v_bonuses["resistencia"]["fixo"],
+        permanent_attrs["forca"],
+        permanent_attrs["velocidade"],
+        permanent_attrs["resistencia"],
     )
     reiryoku = int(reiryoku * (1.0 + per_bonuses.get("reiryoku", 0.0)))
-    multiplicador = 1.0 + v_bonuses["forca"]["mult"] + per_bonuses.get("forca", 0.0) + per_bonuses.get("reiatsu", 0.0)
+    multiplicador = build_reiatsu_multiplier(v_bonuses["forca"], per_bonuses)
     reiatsu = calcular_reiatsu(reiryoku, multiplicador)
 
     alvo_idx = len(REIATSU_LIMITS) - 1
@@ -388,6 +403,7 @@ class ModalNome(ui.Modal, title='Registro'):
         super().__init__()
         self.raca = raca
     async def on_submit(self, interaction):
+        gene_vasto_lorde = None
         with get_connection() as conn:
             try:
                 existing = conn.execute('SELECT 1 FROM personagens WHERE user_id = ?', (interaction.user.id,)).fetchone()
@@ -396,13 +412,26 @@ class ModalNome(ui.Modal, title='Registro'):
 
                 delete_player_data(conn, interaction.user.id, include_character=False)
                 conn.execute('INSERT INTO personagens (user_id, nome, raca) VALUES (?, ?, ?)', (interaction.user.id, self.nome_input.value, self.raca))
+                gene_vasto_lorde = roll_vasto_lorde_gene_if_needed(conn, interaction.user.id, self.raca)
                 conn.commit()
             except:
                 return await interaction.response.send_message("❌ Não foi possível criar o personagem.", ephemeral=True)
         
         # Atribui a vaga/raça e cargos automaticamente após criar
         sucesso, msg = await atribuir_vaga_logica(interaction.guild, interaction.user, self.raca)
-        await interaction.response.send_message(f"✅ Personagem criado como **{self.raca}**! {msg}", ephemeral=True)
+        content = f"✅ Personagem criado como **{self.raca}**! {msg}"
+        if gene_vasto_lorde is not None:
+            if gene_vasto_lorde:
+                content += (
+                    "\n\nAlgo profundo desperta no vazio da sua alma. "
+                    "Você sente que nasceu destinado a algo maior, como se seu potencial não tivesse limite."
+                )
+            else:
+                content += (
+                    "\n\nO vazio responde em silêncio. "
+                    "Você sente força, mas também um limite antigo, como se seu potencial tivesse um teto natural."
+                )
+        await interaction.response.send_message(content, ephemeral=gene_vasto_lorde is None)
 
 class MenuRaca(ui.View):
     def __init__(self, races):
@@ -780,12 +809,27 @@ class PlayerSystem(commands.Cog):
 
             raca, f, v, r, limite_atual, pontos_livres_atual = res
             v_bonuses = get_vagas_bonus(membro.id)
-            fator = 1.0 + v_bonuses['forca']['mult']
+            per_bonuses = get_pericia_bonuses(membro.id)
+            fator = build_reiatsu_multiplier(v_bonuses['forca'], per_bonuses)
             
             reiryoku_necessario = target_reiatsu / fator
-            reiryoku_atual = (f + v_bonuses['forca']['fixo']) + (v + v_bonuses['velocidade']['fixo']) + (r + v_bonuses['resistencia']['fixo'])
+            bases = {"forca": f, "velocidade": v, "resistencia": r}
+            permanent_attrs = passive_attributes(bases, v_bonuses)
+            reiryoku_mult = 1.0 + per_bonuses.get("reiryoku", 0.0)
+            reiryoku_atual = calcular_reiryoku(
+                permanent_attrs["forca"],
+                permanent_attrs["velocidade"],
+                permanent_attrs["resistencia"],
+            ) * reiryoku_mult
+            point_gain = max(
+                1,
+                max(
+                    passive_attribute_value(bases[attr] + 1, v_bonuses[attr]) - permanent_attrs[attr]
+                    for attr in bases
+                ),
+            ) * reiryoku_mult
             
-            pontos_para_dar = int(reiryoku_necessario - reiryoku_atual)
+            pontos_para_dar = math.ceil((reiryoku_necessario - reiryoku_atual) / point_gain)
             if pontos_para_dar <= 0:
                 return await ctx.send(f"⚠️ {membro.mention} já possui poder superior ao nível **{target_nome}**.")
 

@@ -6,7 +6,7 @@ from database import get_connection
 from utils.ui_components import PaginatorView
 from cogs.potencial_system import ModalConsumoPotencial, PotencialAttrScopeView
 from utils.race_restrictions import normalize_race_restriction
-from utils.logic import atribuir_vaga_logica, excluir_vaga_criada_logica, remover_vaga_logica
+from utils.logic import atribuir_vaga_logica, excluir_vaga_logica, remover_vaga_logica
 from utils.tecnica_service import configure_tecnica_buff, list_tecnicas
 
 
@@ -103,21 +103,24 @@ def get_vaga_categories():
         ).fetchall()]
 
 
-def get_created_vaga_categories():
+def get_deletable_vaga_categories():
     with get_connection() as conn:
         return [row[0] for row in conn.execute(
             '''
             SELECT DISTINCT categoria
             FROM vagas
-            WHERE COALESCE(criada, 0) = 1
-              AND categoria IS NOT NULL
+            WHERE categoria IS NOT NULL
               AND categoria != ''
             ORDER BY categoria COLLATE NOCASE
             '''
         ).fetchall()]
 
 
-def get_created_vagas_by_category(categoria):
+def get_created_vaga_categories():
+    return get_deletable_vaga_categories()
+
+
+def get_deletable_vagas_by_category(categoria):
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -132,12 +135,15 @@ def get_created_vagas_by_category(categoria):
                     WHERE vv.vaga_pai = v.nome OR vv.vaga_filha = v.nome) AS vinculos
             FROM vagas v
             WHERE v.categoria = ?
-              AND COALESCE(v.criada, 0) = 1
             ORDER BY v.nome COLLATE NOCASE
             ''',
             (categoria,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def get_created_vagas_by_category(categoria):
+    return get_deletable_vagas_by_category(categoria)
 
 
 def get_vagas_by_category(categoria):
@@ -997,18 +1003,18 @@ class EditarVagaSelectView(ui.View):
 class SelectCategoriaExcluirVaga(ui.Select):
     def __init__(self, categorias):
         options = [discord.SelectOption(label=categoria, value=categoria) for categoria in categorias[:25]]
-        super().__init__(placeholder="Escolha a categoria da vaga criada...", options=options)
+        super().__init__(placeholder="Escolha a categoria da vaga...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Apenas administradores podem excluir vagas.", ephemeral=True)
 
-        vagas = get_created_vagas_by_category(self.values[0])
+        vagas = get_deletable_vagas_by_category(self.values[0])
         if not vagas:
-            return await interaction.response.send_message("❌ Nenhuma vaga criada nesta categoria.", ephemeral=True)
+            return await interaction.response.send_message("❌ Nenhuma vaga nesta categoria.", ephemeral=True)
 
         await interaction.response.send_message(
-            "Selecione a vaga criada que deseja excluir:",
+            "Selecione a vaga que deseja excluir:",
             view=ExcluirVagaSelectView(vagas),
             ephemeral=True,
         )
@@ -1027,7 +1033,7 @@ class SelectExcluirVaga(ui.Select):
                 value=str(index),
                 description=f"Ocupantes: {ocupantes} | Vínculos: {vinculos}"[:100],
             ))
-        super().__init__(placeholder=f"Vagas criadas {start_index + 1}-{start_index + len(vagas)}", options=options)
+        super().__init__(placeholder=f"Vagas {start_index + 1}-{start_index + len(vagas)}", options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
@@ -1067,7 +1073,7 @@ class ConfirmExcluirVagaView(ui.View):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Apenas administradores podem excluir vagas.", ephemeral=True)
 
-        ok, msg, details = await excluir_vaga_criada_logica(interaction.guild, self.vaga["nome"])
+        ok, msg, details = await excluir_vaga_logica(interaction.guild, self.vaga["nome"])
         self._disable()
         if not ok:
             return await interaction.response.edit_message(content=msg, embed=None, view=self)
@@ -1130,14 +1136,14 @@ class VagasView(ui.View):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Apenas administradores podem excluir vagas.", ephemeral=True)
 
-        categorias = get_created_vaga_categories()
+        categorias = get_deletable_vaga_categories()
         if not categorias:
-            return await interaction.response.send_message("❌ Nenhuma vaga criada foi encontrada para excluir.", ephemeral=True)
+            return await interaction.response.send_message("❌ Nenhuma vaga cadastrada foi encontrada para excluir.", ephemeral=True)
 
         view = ui.View(timeout=120)
         view.add_item(SelectCategoriaExcluirVaga(categorias))
         await interaction.response.send_message(
-            "Selecione a categoria da vaga criada que deseja excluir:",
+            "Selecione a categoria da vaga que deseja excluir:",
             view=view,
             ephemeral=True,
         )

@@ -55,7 +55,8 @@ class PlayerGuideView(ui.View):
         embed = discord.Embed(title="⚔️ Entendendo Atributos", color=0xe74c3c)
         embed.description = (
             "**Cálculo de Pontos:**\nCada 1 ponto investido aumenta em +1 seu atributo base.\n\n"
-            "**Impacto na Reiatsu:**\nSua Reiatsu é o resultado de: `(Soma dos Atributos Base + Bônus Fixos) * Multiplicadores`.\n\n"
+            "**Impacto na Reiatsu:**\nBônus de raça inicial/especial entram como bônus passivos nos atributos físicos. "
+            "O Reiryoku nasce da soma desses atributos permanentes, e a Reiatsu escala a partir dele.\n\n"
             "• **Força:** Dano físico e potência de impacto.\n"
             "• **Velocidade:** Ordem de ataque e capacidade de esquiva.\n"
             "• **Resistência:** Vida, mitigação de dano e fôlego espiritual."
@@ -113,9 +114,9 @@ class AdminGuideView(ui.View):
         embed = discord.Embed(title="🎭 Gestão de Vagas", color=0xf1c40f)
         embed.description = (
             "Vagas são bônus que dão cargos e multiplicadores.\n\n"
-            "• Use `.vagas` para listar vagas e, como admin, criar, editar ou excluir vagas criadas pelos botões.\n"
+            "• Use `.vagas` para listar vagas e, como admin, criar, editar ou excluir vagas cadastradas.\n"
             "• Use `.info ID` para consultar uma vaga.\n"
-            "• Use `.buffar` para configurar bônus matemáticos.\n"
+            "• Use `.buffar` para configurar bônus matemáticos. Em raças iniciais/especiais, esses bônus são passivos nos atributos.\n"
             "• Use `.setar_ponto`, `.vincular_vaga`, `.dar_vaga` e `.remover_vaga` para pontos, vínculos e atribuições."
         )
         await interaction.response.edit_message(embed=embed)
@@ -239,7 +240,7 @@ class GuideSystem(commands.Cog):
                 "dar_slot_potencial": "Aumenta o limite de transformações."
             },
             "Criação de Conteúdo": {
-                "vagas": "Menu interativo para listar vagas e criar, editar ou excluir vagas criadas via botão admin.",
+                "vagas": "Menu interativo para listar vagas e criar, editar ou excluir vagas cadastradas.",
                 "buffar": "Configura buffs por categoria de vaga, buffs de técnica, consumo e multiplicadores de potencial.",
                 "setar_ponto": "Configura PA/PP bônus de vagas e PA/PP iniciais das raças.",
                 "vincular_vaga": "Abre o menu para configurar vínculos de vaga mãe e vaga filha, com opção de filha extra.",

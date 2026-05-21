@@ -2,6 +2,7 @@ import math
 import sqlite3
 
 from database import get_connection, get_pericia_bonuses, get_vagas_bonus
+from utils.attribute_math import passive_attributes, reiatsu_multiplier as build_reiatsu_multiplier
 from utils.logic import calcular_reiatsu_efetiva, calcular_reiryoku, get_potencial_info
 from utils.pericia_service import build_pericia_raca_filter, get_accessible_pericia_racas
 
@@ -301,10 +302,14 @@ def get_max_reiryoku(user_id):
 
     vagas = get_vagas_bonus(user_id)
     pericias = get_pericia_bonuses(user_id)
+    permanent_attrs = passive_attributes(
+        {"forca": row[0], "velocidade": row[1], "resistencia": row[2]},
+        vagas,
+    )
     total = calcular_reiryoku(
-        row[0] + vagas["forca"]["fixo"],
-        row[1] + vagas["velocidade"]["fixo"],
-        row[2] + vagas["resistencia"]["fixo"],
+        permanent_attrs["forca"],
+        permanent_attrs["velocidade"],
+        permanent_attrs["resistencia"],
     )
     return int(total * (1.0 + pericias.get("reiryoku", 0.0)))
 
@@ -317,7 +322,7 @@ def get_reiatsu_value(user_id):
     vagas = get_vagas_bonus(user_id)
     pericias = get_pericia_bonuses(user_id)
     mult_potencial, _, _ = get_potencial_info(user_id, "forca")
-    multiplicador = (1.0 + vagas["forca"]["mult"] + pericias.get("forca", 0.0) + pericias.get("reiatsu", 0.0)) * mult_potencial
+    multiplicador = build_reiatsu_multiplier(vagas["forca"], pericias, mult_potencial)
     return calcular_reiatsu_efetiva(state["reiryoku_atual"], state["reiryoku_max"], multiplicador)
 
 

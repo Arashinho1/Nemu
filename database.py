@@ -1,10 +1,14 @@
 import os
 import sqlite3
 import unicodedata
+import random
 
 from utils.default_vagas import DEFAULT_VAGAS
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rpg_bleach.db')
+PHYSICAL_ATTRIBUTES = ('forca', 'velocidade', 'resistencia')
+PASSIVE_RACE_CATEGORIES = ('Raças Iniciais', 'Raças Normais', 'Raças Especiais')
+GENE_VASTO_LORDE_CHANCE = 0.01
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -340,6 +344,74 @@ def _default_vaga_identity_sets():
     return default_names, default_ids
 
 
+def _ensure_vaga_seed_deletions_table(cursor):
+    cursor.execute('''CREATE TABLE IF NOT EXISTS vagas_seed_excluidas (
+        nome_key TEXT PRIMARY KEY,
+        nome TEXT NOT NULL,
+        vaga_id TEXT UNIQUE,
+        excluida_em TEXT DEFAULT CURRENT_TIMESTAMP)''')
+
+
+def _ensure_vasto_lorde_gene_table(cursor):
+    cursor.execute('''CREATE TABLE IF NOT EXISTS player_gene_vasto_lorde (
+        user_id INTEGER PRIMARY KEY,
+        possui_gene INTEGER NOT NULL DEFAULT 0,
+        chance REAL NOT NULL DEFAULT 0.01,
+        valor_sorteado REAL,
+        criado_em TEXT DEFAULT CURRENT_TIMESTAMP)''')
+
+
+def roll_vasto_lorde_gene_if_needed(conn, user_id, raca):
+    if _pericia_key(raca) != 'hollow':
+        return None
+
+    cursor = conn.cursor()
+    _ensure_vasto_lorde_gene_table(cursor)
+    existing = cursor.execute(
+        'SELECT possui_gene FROM player_gene_vasto_lorde WHERE user_id = ?',
+        (user_id,),
+    ).fetchone()
+    if existing:
+        return bool(existing[0])
+
+    roll = random.random()
+    possui_gene = roll < GENE_VASTO_LORDE_CHANCE
+    cursor.execute(
+        '''
+        INSERT INTO player_gene_vasto_lorde (user_id, possui_gene, chance, valor_sorteado)
+        VALUES (?, ?, ?, ?)
+        ''',
+        (user_id, int(possui_gene), GENE_VASTO_LORDE_CHANCE, roll),
+    )
+    return possui_gene
+
+
+def _deleted_default_vaga_identity_sets(cursor):
+    _ensure_vaga_seed_deletions_table(cursor)
+    rows = cursor.execute('SELECT nome_key, vaga_id FROM vagas_seed_excluidas').fetchall()
+    deleted_names = {row[0] for row in rows if row[0]}
+    deleted_ids = {row[1] for row in rows if row[1]}
+    return deleted_names, deleted_ids
+
+
+def mark_default_vaga_deleted(cursor, nome, vaga_id):
+    default_names, default_ids = _default_vaga_identity_sets()
+    nome_key = _pericia_key(nome)
+    is_default = nome_key in default_names or (vaga_id and vaga_id in default_ids)
+    if not is_default:
+        return False
+
+    _ensure_vaga_seed_deletions_table(cursor)
+    cursor.execute(
+        '''
+        INSERT OR REPLACE INTO vagas_seed_excluidas (nome_key, nome, vaga_id, excluida_em)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ''',
+        (nome_key, nome, vaga_id),
+    )
+    return True
+
+
 def _mark_existing_created_vagas(cursor):
     default_names, default_ids = _default_vaga_identity_sets()
     for nome, vaga_id in cursor.execute('SELECT nome, vaga_id FROM vagas').fetchall():
@@ -457,6 +529,7 @@ def _upsert_default_vagas(cursor):
     existing_rows = cursor.execute('SELECT nome, vaga_id FROM vagas').fetchall()
     existing_by_name = {_pericia_key(nome): nome for nome, vaga_id in existing_rows}
     existing_by_id = {vaga_id: nome for nome, vaga_id in existing_rows if vaga_id}
+    deleted_names, deleted_ids = _deleted_default_vaga_identity_sets(cursor)
 
     for vaga in DEFAULT_VAGAS:
         if len(vaga) == 5:
@@ -465,6 +538,9 @@ def _upsert_default_vagas(cursor):
         else:
             nome, categoria, limite, vaga_id, descricao, restricao_raca = vaga
         key = _pericia_key(nome)
+        if key in deleted_names or (vaga_id and vaga_id in deleted_ids):
+            continue
+
         current_nome = existing_by_name.get(key) or existing_by_id.get(vaga_id)
         if current_nome:
             cursor.execute(
@@ -512,6 +588,7 @@ def setup_db():
             velocidade INTEGER DEFAULT 0, resistencia INTEGER DEFAULT 0, pontos_livres INTEGER DEFAULT 0,
             limite_nivel INTEGER DEFAULT 0, slots_potencial INTEGER DEFAULT 1, 
             pontos_pericia INTEGER DEFAULT 0)''')
+        _ensure_vasto_lorde_gene_table(cursor)
         cursor.execute('''CREATE TABLE IF NOT EXISTS potenciais (
             nome TEXT PRIMARY KEY, multiplicador REAL, duracao INTEGER, cooldown INTEGER DEFAULT 0,
             custo_ativacao INTEGER DEFAULT 0, custo_turno INTEGER DEFAULT 0,
@@ -542,6 +619,7 @@ def setup_db():
             FOREIGN KEY(vaga_pai) REFERENCES vagas(nome),
             FOREIGN KEY(vaga_filha) REFERENCES vagas(nome),
             PRIMARY KEY (vaga_pai, vaga_filha))''')
+        _ensure_vaga_seed_deletions_table(cursor)
         
         # Tabelas do Sistema de Perícias
         cursor.execute('''CREATE TABLE IF NOT EXISTS pericias_base (
@@ -1135,18 +1213,37 @@ def set_pretensao_fechado_manual(fechado=True):
 def get_vagas_bonus(user_id):
     with get_connection() as conn:
         res = conn.execute('''
-            SELECT v.multiplicador, v.bonus_fixo, v.atributo
+            SELECT v.multiplicador, v.bonus_fixo, v.atributo, v.categoria
             FROM player_vagas pv JOIN vagas v ON pv.vaga_nome = v.nome 
             WHERE pv.user_id = ?
         ''', (user_id,)).fetchall()
     
-    bonuses = {k: {'mult': 0.0, 'fixo': 0} for k in ['forca', 'velocidade', 'resistencia']}
-    for mult, fixo, attr_str in res:
-        targets = [a.strip().lower() for a in attr_str.replace('+', ',').split(',')]
+    bonuses = {
+        k: {
+            'mult': 0.0,
+            'fixo': 0,
+            'passive_mult': 0.0,
+            'passive_fixo': 0,
+            'non_passive_mult': 0.0,
+            'non_passive_fixo': 0,
+        }
+        for k in PHYSICAL_ATTRIBUTES
+    }
+    for mult, fixo, attr_str, categoria in res:
+        targets = _split_bonus_targets(attr_str)
+        mult = float(mult or 0.0)
+        fixo = int(fixo or 0)
+        is_passive_race = categoria in PASSIVE_RACE_CATEGORIES
         for k in bonuses:
-            if 'todos' in targets or k in targets:
+            if k in targets:
                 bonuses[k]['mult'] += mult
                 bonuses[k]['fixo'] += fixo
+                if is_passive_race:
+                    bonuses[k]['passive_mult'] += mult
+                    bonuses[k]['passive_fixo'] += fixo
+                else:
+                    bonuses[k]['non_passive_mult'] += mult
+                    bonuses[k]['non_passive_fixo'] += fixo
     return bonuses
 
 

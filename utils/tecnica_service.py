@@ -2,6 +2,7 @@ import sqlite3
 import unicodedata
 
 from database import get_connection, get_vagas_bonus, get_pericia_bonuses
+from utils.attribute_math import passive_attributes
 from utils.logic import calcular_reiryoku
 from utils.pericia_service import get_accessible_pericia_racas, split_raca_list
 
@@ -567,10 +568,18 @@ def use_hollow_regen(user_id):
         # Cálculo de Reiryoku Máximo (Atributos + Bônus)
         v_bonuses = get_vagas_bonus(user_id)
         p_bonuses = get_pericia_bonuses(user_id)
+        permanent_attrs = passive_attributes(
+            {
+                "forca": char['forca'],
+                "velocidade": char['velocidade'],
+                "resistencia": char['resistencia'],
+            },
+            v_bonuses,
+        )
         r_base = calcular_reiryoku(
-            char['forca'] + v_bonuses["forca"]["fixo"],
-            char['velocidade'] + v_bonuses["velocidade"]["fixo"],
-            char['resistencia'] + v_bonuses["resistencia"]["fixo"]
+            permanent_attrs["forca"],
+            permanent_attrs["velocidade"],
+            permanent_attrs["resistencia"],
         )
         r_max = int(r_base * (1.0 + p_bonuses.get("reiryoku", 0.0)))
 

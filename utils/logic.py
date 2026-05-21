@@ -3,7 +3,7 @@ import discord
 import logging
 import math
 import sqlite3
-from database import get_connection
+from database import get_connection, mark_default_vaga_deleted
 from utils.race_restrictions import normalize_race_restriction, race_restriction_allows
 
 logger = logging.getLogger("nemu.logic")
@@ -738,12 +738,12 @@ async def remover_vaga_logica(guild, membro, nome_vaga):
         return ok, msg, removed
 
 
-async def excluir_vaga_criada_logica(guild, nome_vaga):
+async def excluir_vaga_logica(guild, nome_vaga):
     with get_connection() as conn:
         cursor = conn.cursor()
         vaga = cursor.execute(
             '''
-            SELECT nome, categoria, role_id, COALESCE(criada, 0)
+            SELECT nome, categoria, role_id, COALESCE(criada, 0), vaga_id
             FROM vagas
             WHERE nome = ?
             ''',
@@ -751,8 +751,8 @@ async def excluir_vaga_criada_logica(guild, nome_vaga):
         ).fetchone()
         if not vaga:
             return False, "❌ Vaga não encontrada.", None
-        if not int(vaga[3] or 0):
-            return False, "❌ Apenas vagas criadas manualmente podem ser excluídas por este menu.", None
+
+        was_default_seed = mark_default_vaga_deleted(cursor, vaga[0], vaga[4])
 
         direct_user_ids = [
             row[0] for row in cursor.execute(
@@ -806,7 +806,7 @@ async def excluir_vaga_criada_logica(guild, nome_vaga):
         cursor.execute('DELETE FROM player_vagas WHERE vaga_nome = ? OR origem_vaga = ?', (nome_vaga, nome_vaga))
         cursor.execute('UPDATE personagens SET raca = NULL WHERE raca = ?', (nome_vaga,))
         cursor.execute('DELETE FROM vagas_vinculo WHERE vaga_pai = ? OR vaga_filha = ?', (nome_vaga, nome_vaga))
-        cursor.execute('DELETE FROM vagas WHERE nome = ? AND COALESCE(criada, 0) = 1', (nome_vaga,))
+        cursor.execute('DELETE FROM vagas WHERE nome = ?', (nome_vaga,))
         conn.commit()
 
     details = {
@@ -814,5 +814,10 @@ async def excluir_vaga_criada_logica(guild, nome_vaga):
         "categoria": vaga[1],
         "usuarios": len(set(direct_user_ids)),
         "removidas": removed,
+        "seed_excluida": was_default_seed,
     }
     return True, f"✅ Vaga `{nome_vaga}` excluída do sistema.", details
+
+
+async def excluir_vaga_criada_logica(guild, nome_vaga):
+    return await excluir_vaga_logica(guild, nome_vaga)
